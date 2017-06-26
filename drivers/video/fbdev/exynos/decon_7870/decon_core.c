@@ -32,6 +32,7 @@
 #include <linux/seq_file.h>
 #include <linux/of_gpio.h>
 #include <linux/reboot.h>
+#include <linux/display_state.h>
 
 #include <media/exynos_mc.h>
 #include <video/mipi_display.h>
@@ -47,6 +48,13 @@
 #include "../../../../kernel/irq/internals.h"
 
 #define MHZ (1000 * 1000)
+
+bool display_on = true;
+
+bool is_display_on()
+{
+	return display_on;
+}
 
 #ifdef CONFIG_OF
 static const struct of_device_id decon_device_table[] = {
@@ -1566,6 +1574,7 @@ static int decon_blank(int blank_mode, struct fb_info *info)
 	case FB_BLANK_NORMAL:
 		DISP_SS_EVENT_LOG(DISP_EVT_BLANK, &decon->sd, ktime_set(0, 0));
 		ret = decon_disable(decon);
+		display_on = false;
 		if (ret) {
 			decon_err("failed to disable decon\n");
 			goto blank_exit;
@@ -1574,6 +1583,7 @@ static int decon_blank(int blank_mode, struct fb_info *info)
 	case FB_BLANK_UNBLANK:
 		DISP_SS_EVENT_LOG(DISP_EVT_UNBLANK, &decon->sd, ktime_set(0, 0));
 		ret = decon_enable(decon);
+		display_on = true;
 		if (ret) {
 			decon_err("failed to enable decon\n");
 			goto blank_exit;
