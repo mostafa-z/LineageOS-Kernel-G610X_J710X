@@ -15,7 +15,6 @@
 *.a
 *.s
 *.ko
-*.so
 *.so.dbg
 *.mod.c
 *.i
@@ -31,6 +30,7 @@
 *.lz4
 *.lzo
 *.patch
+*.diff
 *.gcno
 modules.builtin
 Module.symvers
@@ -57,12 +57,15 @@ Module.symvers
 #
 !.gitignore
 !.mailmap
+!.placeholder
 
 #
 # Generated include files
 #
 include/config
 include/generated
+scripts/rkp_cfp/tmp
+arch/arm64/boot/dtb/
 arch/*/include/generated
 
 # stgit generated dirs
@@ -82,7 +85,12 @@ GRTAGS
 GSYMS
 GTAGS
 
+*.img
+*.zip
+*.log
+*.dtb
 *.orig
+*.rej
 *~
 \#*#
 
@@ -96,3 +104,8 @@ x509.genkey
 
 # Kconfig presets
 all.config
+
+WORKING-DIR/tools/split_img/boot.img-zImage
+WORKING-DIR/tools/split_img/boot.img-dtb
+arch/arm64/crypto/sha256-core.S
+arch/arm64/crypto/sha512-core.S
