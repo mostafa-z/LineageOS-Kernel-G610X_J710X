@@ -92,6 +92,8 @@ struct mmc_ext_csd {
 	u8			raw_partition_support;	/* 160 */
 	u8			raw_rpmb_size_mult;	/* 168 */
 	u8			raw_erased_mem_count;	/* 181 */
+	u8			enhanced_strobe_support;	/* 184 */
+#define MMC_STROBE_ENHANCED_SUPPORT	BIT(0)
 	u8			raw_ext_csd_structure;	/* 194 */
 	u8			raw_card_type;		/* 196 */
 	u8			out_of_int_time;	/* 198 */
@@ -117,6 +119,22 @@ struct mmc_ext_csd {
 
 	unsigned int            feature_support;
 #define MMC_DISCARD_FEATURE	BIT(0)                  /* CMD38 feature */
+	/*
+	 * smart_info : It's for eMMC 5.0 or later device
+	 * [63:56] : DEVICE_LIFE_TIME_EST_TYPE_B [269]
+	 * [55:48] : DEVICE_LIFE_TIME_EST_TYPE_A [268]
+	 * [47:40] : PRE_EOL_INFO [267]
+	 * [39:32] : OPTIMAL_TRIM_UNIT_SIZE [264]
+	 * [31:16] : DEVICE_VERSION [263-262]
+	 * [15:08] : HC_ERASE_GRP_SIZE [224]
+	 * [07:00] : HC_WP_GRP_SIZE [221]
+	 */
+	unsigned long long	smart_info;
+	/*
+	 * fwdate : It's for eMMC 5.0 or later device
+	 * [63:00] : FIRMWARE_VERSION [261-254]
+	 */
+	unsigned long long	fwdate;
 };
 
 struct sd_scr {
@@ -238,6 +256,15 @@ struct mmc_part {
 #define MMC_BLK_DATA_AREA_RPMB	(1<<3)
 };
 
+struct mmc_card_error_log {
+	char    type[4];        // sbc, cmd, data, stop
+	int     err_type;
+	u32     status;
+	u64     first_issue_time;
+	u64     last_issue_time;
+	u32     count;
+};
+
 /*
  * MMC device
  */
@@ -306,6 +333,10 @@ struct mmc_card {
 	struct dentry		*debugfs_root;
 	struct mmc_part	part[MMC_NUM_PHY_PARTITION]; /* physical partitions */
 	unsigned int    nr_parts;
+	u8 en_strobe_enhanced;	/*enhanced strobe ctrl */
+
+	struct device_attribute error_count;
+	struct mmc_card_error_log err_log[8];
 };
 
 /*

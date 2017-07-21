@@ -248,8 +248,8 @@ SUBARCH := $(shell uname -m | sed -e s/i.86/x86/ -e s/x86_64/x86/ \
 # "make" in the configured kernel build directory always uses that.
 # Default value for CROSS_COMPILE is not to prefix executables
 # Note: Some architectures assign CROSS_COMPILE in their arch/*/Makefile
-ARCH		?= $(SUBARCH)
-CROSS_COMPILE	?= $(CONFIG_CROSS_COMPILE:"%"=%)
+ARCH           ?= $(SUBARCH)
+CROSS_COMPILE  ?= $(CONFIG_CROSS_COMPILE:"%"=%)
 
 # Architecture as present in compile.h
 UTS_MACHINE 	:= $(ARCH)
@@ -369,6 +369,11 @@ PERL		= perl
 PYTHON		= python
 CHECK		= sparse
 
+ifeq ($(CONFIG_FIPS_FMP),)
+    READELF        = $(CROSS_COMPILE)readelf
+    export READELF
+endif
+
 CHECKFLAGS     := -D__linux__ -Dlinux -D__STDC__ -Dunix -D__unix__ \
 		  -Wbitwise -Wno-return-void $(CF)
 CFLAGS_MODULE   =
@@ -402,6 +407,7 @@ KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -fno-strict-aliasing -fno-common \
 		   -Werror-implicit-function-declaration \
 		   -Wno-format-security \
+		   -Werror \
 		   -std=gnu89
 
 KBUILD_AFLAGS_KERNEL :=
@@ -777,10 +783,26 @@ endif
 
 include $(srctree)/scripts/Makefile.extrawarn
 
+#Disable the whole of the following block to disable LKM AUTH
+ifeq ($(CONFIG_TIMA_LKMAUTH),y)
+ifeq ($(CONFIG_TIMA),y)
+    KBUILD_CFLAGS += -DTIMA_LKM_AUTH_ENABLED -Idrivers/gud/gud-exynos7870/MobiCoreDriver/mci/
+    KBUILD_AFLAGS += -DTIMA_LKM_AUTH_ENABLED
+endif
+endif
+
 # Add user supplied CPPFLAGS, AFLAGS and CFLAGS as the last assignments
 KBUILD_CPPFLAGS += $(KCPPFLAGS)
 KBUILD_AFLAGS += $(KAFLAGS)
 KBUILD_CFLAGS += $(KCFLAGS)
+
+ifeq ($(CONFIG_SENSORS_FINGERPRINT), y)
+ifneq ($(CONFIG_SEC_FACTORY), true)
+ifneq ($(SEC_BUILD_CONF_USE_FINGERPRINT_TZ), false)
+    export KBUILD_FP_SENSOR_CFLAGS := -DENABLE_SENSORS_FPRINT_SECURE
+endif
+endif
+endif
 
 # Use --build-id when available.
 LDFLAGS_BUILD_ID = $(patsubst -Wl$(comma)%,%,\

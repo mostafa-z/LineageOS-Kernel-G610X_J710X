@@ -105,6 +105,8 @@ fw-shipped-$(CONFIG_USB_KAWETH) += kaweth/new_code.bin kaweth/trigger_code.bin \
 				   kaweth/new_code_fix.bin \
 				   kaweth/trigger_code_fix.bin
 ifdef CONFIG_FIRMWARE_IN_KERNEL
+fw-shipped-$(CONFIG_EXYNOS8890_APM) += apm_8890_v6.h
+fw-shipped-$(CONFIG_GNSS_SHMEM_IF) += gnss_firmware.bin
 fw-shipped-$(CONFIG_USB_SERIAL_KEYSPAN_MPR) += keyspan/mpr.fw
 fw-shipped-$(CONFIG_USB_SERIAL_KEYSPAN_USA18X) += keyspan/usa18x.fw
 fw-shipped-$(CONFIG_USB_SERIAL_KEYSPAN_USA19) += keyspan/usa19.fw
@@ -135,6 +137,38 @@ fw-shipped-$(CONFIG_USB_SERIAL_XIRCOM) += keyspan_pda/xircom_pgs.fw
 fw-shipped-$(CONFIG_USB_VICAM) += vicam/firmware.fw
 fw-shipped-$(CONFIG_VIDEO_CPIA2) += cpia2/stv0672_vp4.bin
 fw-shipped-$(CONFIG_YAM) += yam/1200.bin yam/9600.bin
+
+fw-shipped-$(CONFIG_EPEN_WACOM_W9019) += epen/w9019_gtaxlnote.bin epen/w9019_gtaxlnote_rev00.bin
+
+fw-shipped-$(CONFIG_TOUCHSCREEN_MELFAS_MMS449) += tsp_melfas/mms449_s5neo.fw
+fw-shipped-$(CONFIG_TOUCHSCREEN_MELFAS_MMS438) += tsp_melfas/mms438_j7x.fw tsp_melfas/mms438_j7x_hd.fw tsp_melfas/mms438_a3xpre.fw
+
+fw-shipped-$(CONFIG_TOUCHSCREEN_ATMEL_MXT1664) += tsp_atmel/mxt1664t_matisse.fw
+
+TSPFIRMWARE_DIRECTORY = firmware/tsp_stm
+ifeq ($(shell test -d $(TSPFIRMWARE_DIRECTORY) && echo yes),yes)
+fw-shipped-$(CONFIG_TOUCHSCREEN_FTS7) += tsp_stm/matisse.fw tsp_stm/stm_gtaxl.fw tsp_stm/fts1a096_gtaxl_rev03.fw \
+					tsp_stm/fts1a096_gtaxl_note.fw
+else
+$(warning '$(TSPFIRMWARE_DIRECTORY)' directory dose not exist)
+endif
+TSPFIRMWARE_DIRECTORY = firmware/tsp_zinitix
+ifeq ($(shell test -d $(TSPFIRMWARE_DIRECTORY) && echo yes),yes)
+fw-shipped-$(CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX) += tsp_zinitix/zt7548_degas2.fw tsp_zinitix/zt7538_o7.fw
+else
+$(warning '$(TSPFIRMWARE_DIRECTORY)' directory dose not exist)
+endif
+
+fw-shipped-$(CONFIG_TOUCHSCREEN_SYNAPTICS_I2C_DSX2) += tsp_synaptics/td4300_on7xelte.fw
+fw-shipped-$(CONFIG_TOUCHSCREEN_SYNAPTICS_I2C_DSX2) += tsp_synaptics/td4300_on7xelte_recovery.fw
+
+fw-shipped-$(CONFIG_TOUCHSCREEN_IST3032C) += tsp_imagis/ist3032c_a3x.fw tsp_imagis/ist3032c_a3x_cmcs.bin 
+
+fw-shipped-$(CONFIG_KEYBOARD_TC300K) += coreriver/tc350k_j7x.fw
+fw-shipped-$(CONFIG_KEYBOARD_MELFAS_MHS204) += melfas_tk/mhs204g_on7xlte.fw
+
+fw-shipped-$(CONFIG_KEYBOARD_ABOV_TOUCH_FT1804) += abov/abov_a7_max.fw
+fw-shipped-$(CONFIG_KEYBOARD_ABOV_TOUCH) += abov/abov_a3x_pre.fw
 
 fw-shipped-all := $(fw-shipped-y) $(fw-shipped-m) $(fw-shipped-)
 

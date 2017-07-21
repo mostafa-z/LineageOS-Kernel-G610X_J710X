@@ -2532,6 +2532,7 @@ int security_fs_use(struct super_block *sb)
 {
 	int rc = 0;
 	struct ocontext *c;
+	u32 tmpsid;
 	struct superblock_security_struct *sbsec = sb->s_security;
 	const char *fstype = sb->s_type->name;
 
@@ -2548,7 +2549,8 @@ int security_fs_use(struct super_block *sb)
 		sbsec->behavior = c->v.behavior;
 		if (!c->sid[0]) {
 			rc = sidtab_context_to_sid(&sidtab, &c->context[0],
-						   &c->sid[0]);
+						   &tmpsid);
+			c->sid[0] = tmpsid;
 			if (rc)
 				goto out;
 		}
