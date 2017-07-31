@@ -97,6 +97,14 @@ echo "128000" > /sys/module/lowmemorykiller/parameters/vmpressure_file_min #512 
 echo "1" > /sys/module/process_reclaim/parameters/enable_process_reclaim;
 }
 
+GOV_TUNING()
+{
+for i in cpufreq_l cpufreq_b; do
+	echo "902000" > /$i/interactive/hispeed_freq;
+	echo "75 546000:12 676000:68 757000:8 839000:67 902000:13 1014000:69 1144000:8 1248000:68 1352000:7 1482000:61 1586000:13" > /$i/interactive/target_loads;
+done;
+}
+
 HMP_TUNING()
 {
 for a in /sys/kernel/hmp/*; do
@@ -179,6 +187,7 @@ OPEN_RW;
 
 # set system tuning.
 SYSTEM_TUNING;
+GOV_TUNING;
 HMP_TUNING;
 VM_SPEEDMODE;
 
