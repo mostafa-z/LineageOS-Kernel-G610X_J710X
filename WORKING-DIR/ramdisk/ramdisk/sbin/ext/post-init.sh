@@ -95,6 +95,9 @@ echo "1" > /sys/module/lowmemorykiller/parameters/enable_adaptive_lmk
 echo "128000" > /sys/module/lowmemorykiller/parameters/vmpressure_file_min #512 MiB
 
 echo "1" > /sys/module/process_reclaim/parameters/enable_process_reclaim;
+
+echo "18432,23040,27648,51256,89600,115200" > /sys/module/lowmemorykiller/parameters/minfree;
+echo "16" > /sys/module/lowmemorykiller/parameters/cost;
 }
 
 GOV_TUNING()
