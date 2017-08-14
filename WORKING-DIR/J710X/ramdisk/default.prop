@@ -34,10 +34,6 @@ dalvik.vm.appimageformat=lz4
 debug.atrace.tags.enableflags=0
 
 wlan.wfd.hdcp=disable
-ro.config.tima=0
-ro.config.dmverity=false
-ro.config.rkp=false
-ro.config.kap=false
 ro.sec.fle.encryption=false
 ro.securestorage.support=false
 
