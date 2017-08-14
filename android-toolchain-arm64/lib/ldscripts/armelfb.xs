@@ -7,7 +7,7 @@ OUTPUT_FORMAT("elf32-bigarm", "elf32-bigarm",
 	      "elf32-littlearm")
 OUTPUT_ARCH(arm)
 ENTRY(_start)
-SEARCH_DIR("=/run/media/gabriel/HD2/kernel/crosstool-dorimanx/builds/aarch64-SMG610-linux-gnu/aarch64-SMG610-linux-gnu/lib");
+SEARCH_DIR("=/run/media/gabriel/HD2/kernel/crosstool-dorimanx/builds/aarch64-SMG610-linux-android/aarch64-SMG610-linux-android/lib");
 SECTIONS
 {
   /* Read-only sections, merged into text segment: */
