@@ -69,9 +69,9 @@ FUNC_CLEAN_POST_BUILD()
 	arch/arm64/kernel/vdso/vdso.so.dbg
 	arch/arm64/kernel/vmlinux.lds"
 
-	for f in $PBFILES; do
-		git checkout $f
-	done
+#	for f in $PBFILES; do
+#		git checkout $f
+#	done
 
 	rm -f $WD/tools/ramdisk-new.cpio.gz
 	rm -f $WD/tools/split_img/boot.img-dtb
@@ -244,6 +244,8 @@ FUNC_BUILD_RAMDISK_ANY()
 	mv -f $RDIR/arch/$ARCH/boot/dtb.img $WD/temp/dtb
 
 	\cp -r $WD/anykernel/* $WD/temp
+	\cp -r $WD/ramdisk/ramdisk/sbin/* $WD/temp/ramdisk/sbin
+	\cp $WD/ramdisk/ramdisk/init.knox.sh $WD/temp/ramdisk/init.knox.sh
 
 	mv -f $RDIR/build.log $WD/temp/build.log
 	\cp $RDIR/.config $WD/temp/kernel_config_view_only
