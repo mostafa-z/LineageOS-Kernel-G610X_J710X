@@ -32,7 +32,6 @@
 #include <linux/version.h>
 #include <linux/blkdev.h>
 #include <linux/workqueue.h>
-#include <linux/writeback.h>
 #include <linux/kernel.h>
 #include <linux/log2.h>
 
@@ -138,11 +137,10 @@ static s32 check_type_size(void)
 	return 0;
 }
 
-static s32 __fs_set_vol_flags(struct super_block *sb, u16 new_flag, s32 always_sync)
+static s32 fs_set_vol_flags(struct super_block *sb, u16 new_flag)
 {
 	FS_INFO_T *fsi = &(SDFAT_SB(sb)->fsi);
 	s32 err;
-	s32 sync = 0;
 
 	/* flags are not changed */
 	if (fsi->vol_flag == new_flag)
@@ -174,28 +172,20 @@ static s32 __fs_set_vol_flags(struct super_block *sb, u16 new_flag, s32 always_s
 		bpb->bpb.state = new_flag & VOL_DIRTY ? FAT_VOL_DIRTY : 0x00;
 	}
 
-	if (always_sync)
-		sync = 1;
-	else if ((new_flag == VOL_DIRTY) && (!buffer_dirty(fsi->pbr_bh)))
-		sync = 1;
+	if ((new_flag == VOL_DIRTY) && (!buffer_dirty(fsi->pbr_bh)))
+		err = write_sect(sb, 0, fsi->pbr_bh, 1);
 	else
-		sync = 0;
+		err = write_sect(sb, 0, fsi->pbr_bh, 0);
 
-	err = write_sect(sb, 0, fsi->pbr_bh, sync);
 	if (err)
 		EMSG("%s : failed to modify volume flag\n", __func__);
 
 	return err;
 }
 
-static s32 fs_set_vol_flags(struct super_block *sb, u16 new_flag)
+s32 fscore_set_vol_flags(struct super_block *sb, u16 new_flag)
 {
-	return __fs_set_vol_flags(sb, new_flag, 0);
-}
-
-s32 fscore_set_vol_flags(struct super_block *sb, u16 new_flag, s32 always_sync)
-{
-	return __fs_set_vol_flags(sb, new_flag, always_sync);
+	return fs_set_vol_flags(sb, new_flag);
 }
 
 static inline s32 __fs_meta_sync(struct super_block *sb, s32 do_sync)
@@ -236,10 +226,9 @@ static s32 fs_sync(struct super_block *sb, s32 do_sync)
  *  Cluster Management Functions
  */
 
-static s32 __clear_cluster(struct inode *inode, u32 clu)
+static s32 __clear_cluster(struct super_block *sb, u32 clu)
 {
 	u32 s, n;
-	struct super_block *sb = inode->i_sb;
 	u32 sect_size = (u32)sb->s_blocksize;
 	s32 ret = 0;
 	struct buffer_head *tmp_bh = NULL;
@@ -253,15 +242,6 @@ static s32 __clear_cluster(struct inode *inode, u32 clu)
 		n = s + fsi->sect_per_clus;
 	}
 
-	if (IS_DIRSYNC(inode)) {
-		ret = write_msect_zero(sb, s, (s32)fsi->sect_per_clus);
-		if (ret != -EAGAIN)
-			return ret;
-	}
-
-	/* Trying buffered zero writes
-	 * if it doesn't have DIRSYNC or write_msect_zero() returned -EAGAIN
-	 */
 	for ( ; s < n; s++) {
 #if 0
 		dcache_release(sb, s);
@@ -720,10 +700,6 @@ static s32 search_empty_slot(struct super_block *sb, CHAIN_T *p_dir, s32 num_ent
 			} else if (type == TYPE_DELETED) {
 				num_empty++;
 			} else {
-				/* TODO : Check whether bogus dentry exists or not
-				 * after unused dentry
-				 * hint_uentry means empty slot not TYPE_UNUSED
-				 */
 				num_empty = 0;
 			}
 
@@ -809,7 +785,7 @@ static s32 find_empty_entry(struct inode *inode, CHAIN_T *p_dir, s32 num_entries
 		if (ret < 0)
 			return -EIO;
 
-		if (__clear_cluster(inode, clu.dir))
+		if (__clear_cluster(sb, clu.dir))
 			return -EIO;
 
 		/* (2) append to the FAT chain */
@@ -1211,7 +1187,7 @@ static s32 create_dir(struct inode *inode, CHAIN_T *p_dir, UNI_NAME_T *p_uniname
 	if (ret < 0)
 		return -EIO;
 
-	ret = __clear_cluster(inode, clu.dir);
+	ret = __clear_cluster(sb, clu.dir);
 	if (ret)
 		return ret;
 
@@ -1563,13 +1539,12 @@ s32 fscore_init(void)
 	if (ret)
 		return ret;
 
-	return extent_cache_init();
+	return 0;
 }
 
 /* make free all memory-alloced global buffers */
 s32 fscore_shutdown(void)
 {
-	extent_cache_shutdown();
 	return 0;
 }
 
@@ -1642,7 +1617,7 @@ inline pbr_t *read_pbr_with_logical_sector(struct super_block *sb, struct buffer
 	}
 			
 	sdfat_log_msg(sb, KERN_INFO, 
-		"set logical sector size  : %lu", sb->s_blocksize);
+		"set logical sector size : (%lu bytes)", sb->s_blocksize);
 
 	return p_pbr;
 }
@@ -1735,21 +1710,20 @@ s32 fscore_mount(struct super_block *sb)
 		opts->defrag = 0;
 		ret = mount_fat16(sb, p_pbr);
 	}
+
+	/* warn misaligned data data start sector must be a multiple of clu_size */
+	if (fsi->data_start_sector & (fsi->sect_per_clus - 1)) {
+		sdfat_log_msg(sb, KERN_ERR,
+			"media has misaligned data area (start sect : %u, "
+			"sect_per_clus : %u)",
+			fsi->data_start_sector, fsi->sect_per_clus);
+	}
 free_bh:
 	brelse(tmp_bh);
 	if (ret) {
 		sdfat_log_msg(sb, KERN_ERR, "failed to mount fs-core");
 		goto bd_close;
 	}
-
-	/* warn misaligned data data start sector must be a multiple of clu_size */
-	sdfat_log_msg(sb, KERN_INFO,
-		"detected volume info     : %s "
-		"(bps : %lu, spc : %u, data start : %u, %s)",
-		sdfat_get_vol_type_str(fsi->vol_type),
-		sb->s_blocksize, fsi->sect_per_clus, fsi->data_start_sector,
-		(fsi->data_start_sector & (fsi->sect_per_clus - 1)) ?
-		"misaligned" : "aligned");
 
         ret = load_upcase_table(sb);
         if (ret) {
@@ -1758,7 +1732,7 @@ free_bh:
 	}
 
 	if (fsi->vol_type != EXFAT)
-		goto success;
+		return 0;
 
 	/* allocate-bitmap is only for exFAT */
 	ret = load_alloc_bmp(sb);
@@ -1766,8 +1740,9 @@ free_bh:
 		sdfat_log_msg(sb, KERN_ERR, "failed to load alloc-bitmap");
 		goto free_upcase;
 	}
-success:
+
 	return 0;
+
 free_upcase:
 	free_upcase_table(sb);
 bd_close:
@@ -1798,7 +1773,8 @@ s32 fscore_umount(struct super_block *sb)
 	if (dcache_release_all(sb))
 		ret = -EIO;
 
-	amap_destroy(sb);
+	if (fsi->amap)
+		amap_destroy(sb);
 
 	if (fsi->prev_eio)
 		ret = -EIO;
@@ -1932,16 +1908,6 @@ s32 fscore_lookup(struct inode *inode, u8 *path, FILE_ID_T *fid)
 		} else {
 			fid->flags = fsi->fs_func->get_entry_flag(ep2);
 			fid->start_clu = fsi->fs_func->get_entry_clu0(ep2);
-		}
-
-		/* FOR GRACEFUL ERROR HANDLING */
-		if (IS_CLUS_FREE(fid->start_clu)) {
-			sdfat_fs_error(sb,
-				"non-zero size file starts with zero cluster "
-				"(size : %llu, p_dir : %u, entry : 0x%08x)",
-				fid->size, fid->dir.dir, fid->entry);
-			sdfat_debug_bug_on(1);
-			return -EIO;
 		}
 
 		if (fsi->vol_type == EXFAT)
@@ -2397,37 +2363,12 @@ s32 fscore_truncate(struct inode *inode, u64 old_size, u64 new_size)
 		if (clu.flags == 0x03) {
 			clu.dir += num_clusters;
 			clu.size -= num_clusters;
-#if 0
-		/* extent_get_clus can`t know last_cluster
-		 * when find target cluster in cache.
-		 */
-		} else if (fid->type == TYPE_FILE) {
-			s32 fclus = 0;
-			s32 err = extent_get_clus(inode, num_clusters,
-					&fclus, &(clu.dir), &last_clu, 0);
-			if (err)
-				return -EIO;
-			ASSERT(fclus == num_clusters);
-
-			if ((num_clusters > 1) && (last_clu == fid->start_clu)) {
-				s32 fclus_tmp = 0;
-				u32 temp = 0;
-				err = extent_get_clus(inode, num_clusters -1,
-						&fclus_tmp, &last_clu, &temp, 0);
-				if (err)
-					return -EIO;
-				ASSERT(fclus_tmp == (num_clusters - 1));
-			}
-
-			num_clusters -= fclus;
-			clu.size -= fclus;
-#endif
 		} else {
 			while (num_clusters > 0) {
 				last_clu = clu.dir;
 				if (get_next_clus_safe(sb, &(clu.dir)))
 					return -EIO;
-
+	
 				num_clusters--;
 				clu.size--;
 			}
@@ -2485,11 +2426,7 @@ s32 fscore_truncate(struct inode *inode, u64 old_size, u64 new_size)
 		/*	if (fsi->vol_type != EXFAT)
 			    dcache_modify(sb, sector); */
 
-		/* File size should be zero if there is no cluster allocated */
-		if (IS_CLUS_EOF(fid->start_clu))
-			fsi->fs_func->set_entry_size(ep2, 0);
-		else
-			fsi->fs_func->set_entry_size(ep2, new_size);
+		fsi->fs_func->set_entry_size(ep2, new_size);
 
 		if (new_size == 0) {
 			/* Any directory can not be truncated to zero */
@@ -2517,9 +2454,9 @@ s32 fscore_truncate(struct inode *inode, u64 old_size, u64 new_size)
 				return -EIO;
 	}
 
-	/* (3) invalidate cache and free the clusters */
-	/* clear extent cache */
-	extent_cache_inval_inode(inode);
+	/* (3) free the clusters */
+	if (fsi->fs_func->free_cluster(sb, &clu, evict))
+		return -EIO;
 
 	/* hint information */
 	fid->hint_bmap.off = -1;
@@ -2530,10 +2467,6 @@ s32 fscore_truncate(struct inode *inode, u64 old_size, u64 new_size)
 	/* hint_stat will be used if this is directory. */
 	fid->hint_stat.eidx = 0;
 	fid->hint_stat.clu = fid->start_clu;
-
-	/* free the clusters */
-	if (fsi->fs_func->free_cluster(sb, &clu, evict))
-		return -EIO;
 
 	fs_sync(sb, 0);
 	fs_set_vol_flags(sb, VOL_CLEAN);
@@ -2759,14 +2692,14 @@ s32 fscore_remove(struct inode *inode, FILE_ID_T *fid)
 	clu_to_free.size = (s32)((fid->size-1) >> fsi->cluster_size_bits) + 1;
 	clu_to_free.flags = fid->flags;
 
-	/* (2) invalidate extent cache and free the clusters
+	/* (2) free the clusters 
+	 * set ret to errno only.
 	 */
-	/* clear extent cache */
-	extent_cache_inval_inode(inode);
 	ret = fsi->fs_func->free_cluster(sb, &clu_to_free, 0);
 	/* WARN : DO NOT RETURN ERROR IN HERE */
 
 	/* (3) update FILE_ID_T  */
+	/* patch 1.1.1p0 */
 	fid->size = 0;
 	fid->start_clu = CLUS_EOF;
 	fid->flags = (fsi->vol_type == EXFAT)? 0x03: 0x01;
@@ -2796,8 +2729,6 @@ s32 fscore_read_inode(struct inode *inode, DIR_ENTRY_T *info)
 	u8 is_dir = (fid->type == TYPE_DIR) ? 1 : 0;
 
 	TMSG("%s entered\n", __func__);
-
-	extent_cache_init_inode(inode);
 
 	/* if root directory */
 	if ( is_dir && (fid->dir.dir == fsi->root_dir) && (fid->entry == -1) ) {
@@ -2927,7 +2858,7 @@ s32 fscore_read_inode(struct inode *inode, DIR_ENTRY_T *info)
 /* set the information of a given file
  * REMARK : This function does not need any file name on linux
  */
-s32 fscore_write_inode(struct inode *inode, DIR_ENTRY_T *info, s32 sync)
+s32 fscore_write_inode(struct inode *inode, DIR_ENTRY_T *info)
 {
 	s32 ret = -EIO;
 	u32 sector;
@@ -2991,14 +2922,8 @@ s32 fscore_write_inode(struct inode *inode, DIR_ENTRY_T *info, s32 sync)
 		   overwrite dirsize */
 		if (fsi->fs_func->get_entry_size(ep2))
 			fsi->fs_func->set_entry_size(ep2, 0);
-	} else {
-		/* File size should be zero if there is no cluster allocated */
-		u64 on_disk_size = info->Size;
-		if (IS_CLUS_EOF(fid->start_clu))
-			on_disk_size = 0;
-
-		fsi->fs_func->set_entry_size(ep2, on_disk_size);
-	}
+	} else
+		fsi->fs_func->set_entry_size(ep2, info->Size);
 
 	if (fsi->vol_type == EXFAT) {
 		ret = update_dir_chksum_with_entry_set(sb, es);
@@ -3007,9 +2932,8 @@ s32 fscore_write_inode(struct inode *inode, DIR_ENTRY_T *info, s32 sync)
 		ret = dcache_modify(sb, sector);
 	}
 
-	fs_sync(sb, sync);
-	/* Comment below code to prevent super block update frequently */
-	//fs_set_vol_flags(sb, VOL_CLEAN);
+	/*    fs_sync(sb, 0);
+	    fs_set_vol_flags(sb, VOL_CLEAN); */
 
 	return ret;
 } /* end of fscore_write_inode */
@@ -3061,21 +2985,13 @@ s32 fscore_map_clus(struct inode *inode, s32 clu_offset, u32 *clu, int dest)
 			else
 				*clu += clu_offset;
 		}
-	} else if (fid->type == TYPE_FILE){
-		s32 fclus = 0;
-		s32 err = extent_get_clus(inode, clu_offset,
-				&fclus, clu, &last_clu, 1);
-		if (err)
-			return -EIO;
-
-		clu_offset -= fclus;
 	} else {
 		/* hint information */
 		if ((clu_offset > 0) && (fid->hint_bmap.off > 0) &&
 			(clu_offset >= fid->hint_bmap.off)) {
 			clu_offset -= fid->hint_bmap.off;
 			/* hint_bmap.clu should be valid */
-			ASSERT(fid->hint_bmap.clu >= 2);
+			sdfat_debug_bug_on(fid->hint_bmap.clu < 2);
 			*clu = fid->hint_bmap.clu;
 		}
 
@@ -3129,11 +3045,8 @@ s32 fscore_map_clus(struct inode *inode, s32 clu_offset, u32 *clu, int dest)
 		}
 
 		if (IS_CLUS_EOF(new_clu.dir) || IS_CLUS_FREE(new_clu.dir)) {
-			sdfat_fs_error(sb, "bogus cluster new allocated"
-				"(last_clu : %u, new_clu : %u)",
-				last_clu, new_clu.dir);
-			ASSERT(0);
-			return -EIO;
+			sdfat_debug_bug_on(1);
+			sdfat_fs_error(sb, "Invalid FAT entry");
 		}
 
 		/* Reserved cluster dec. */
@@ -3190,8 +3103,6 @@ s32 fscore_map_clus(struct inode *inode, s32 clu_offset, u32 *clu, int dest)
 	
 				if (fsi->fs_func->get_entry_clu0(ep) != fid->start_clu)
 					fsi->fs_func->set_entry_clu0(ep, fid->start_clu);
-
-				fsi->fs_func->set_entry_size(ep, fid->size);
 
 				if (fsi->vol_type != EXFAT) {
 					if (dcache_modify(sb, sector))
