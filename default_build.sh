@@ -244,6 +244,12 @@ FUNC_BUILD_RAMDISK_ANY()
 	mv -f $RDIR/arch/$ARCH/boot/dtb.img $WD/temp/dtb
 
 	\cp -r $WD/anykernel/* $WD/temp
+
+	if [ ! -d $WD/temp/ramdisk ]; then
+		mkdir $WD/temp/ramdisk
+		mkdir $WD/temp/ramdisk/sbin
+	fi;
+
 	\cp -r $WD/ramdisk/ramdisk/sbin/* $WD/temp/ramdisk/sbin
 	\cp $WD/ramdisk/ramdisk/init.knox.sh $WD/temp/ramdisk/init.knox.sh
 
