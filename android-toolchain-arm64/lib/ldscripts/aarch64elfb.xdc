@@ -7,7 +7,7 @@ OUTPUT_FORMAT("elf64-bigaarch64", "elf64-bigaarch64",
 	      "elf64-littleaarch64")
 OUTPUT_ARCH(aarch64)
 ENTRY(_start)
-SEARCH_DIR("=/run/media/gabriel/HD2/kernel/crosstool-dorimanx/builds/aarch64-SMG610-linux-android/aarch64-SMG610-linux-android/lib");
+SEARCH_DIR("=/run/media/gabriel/HD2/kernel/crosstool-dorimanx/builds/aarch64-SMG610-linux-gnu/aarch64-SMG610-linux-gnu/lib");
 SECTIONS
 {
   /* Read-only sections, merged into text segment: */
