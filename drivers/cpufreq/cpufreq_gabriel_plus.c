@@ -1911,6 +1911,8 @@ static int cpufreq_governor_gabriel_plus(struct cpufreq_policy *policy,
 			tunables->pump_dec_step_at_min_freq = PUMP_DEC_STEP_AT_MIN_FREQ;
 			tunables->index_update = true;
 			tunables->go_hispeed_load_adt_freq_calc = true;
+			tunables->power_save_cpu_load = true;
+			tunables->power_save_max_local_load = true;
 		} else {
 			memcpy(tunables, tuned_parameters[policy->cpu], sizeof(*tunables));
 			kfree(tuned_parameters[policy->cpu]);
