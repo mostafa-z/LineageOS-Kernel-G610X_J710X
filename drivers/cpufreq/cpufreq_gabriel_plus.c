@@ -73,6 +73,7 @@
 #define DEFAULT_IDLE_THRESHOLD 20
 #define DEFAULT_BUMP_FREQ_WEIGHT 150
 #define DEFAULT_BUMP_FREQ_WEIGHT_DIVISION 186
+#define DEFAULT_POWER_BUMP_FREQ_WEIGHT_DIVISION 250
 #define DEFAULT_MAX_LOCAL_LOAD 100
 #define DEFAULT_MAX_LOCAL_LOAD_DIVISION 2
 #define DEFAULT_POWER_MAX_LOCAL_LOAD_DIVISION 1
@@ -150,6 +151,7 @@ struct cpufreq_gabriel_plus_tunables {
 	unsigned long power_max_local_load_division;
 	unsigned long bump_freq_weight;
 	unsigned long bump_freq_weight_division;
+	unsigned long power_bump_freq_weight_division;
 	unsigned long power_cpu_load_max_division;
 	unsigned long cpu_load_max_division;
 	unsigned long cpu_load_current_division;
@@ -407,6 +409,7 @@ static void cpufreq_gabriel_plus_timer(unsigned long data)
 	unsigned int power_max_local_load_division = tunables->power_max_local_load_division;
 	unsigned int bump_freq_weight = tunables->bump_freq_weight;
 	unsigned int bump_freq_weight_division = tunables->bump_freq_weight_division;
+	unsigned int power_bump_freq_weight_division = tunables->power_bump_freq_weight_division;
 	unsigned int power_cpu_load_max_division = tunables->power_cpu_load_max_division;
 	unsigned int cpu_load_max_division = tunables->cpu_load_max_division;
 	unsigned int cpu_load_current_division = tunables->cpu_load_current_division;
@@ -490,7 +493,10 @@ static void cpufreq_gabriel_plus_timer(unsigned long data)
 					new_freq = choose_target_freq(pcpu->policy,
 						index, pump_inc_step, true);
 				} else {
-					new_freq = this_hispeed_freq * tunables->bump_freq_weight / tunables->bump_freq_weight_division;
+					if (tunables->power_save_max_local_load)
+						new_freq = this_hispeed_freq * tunables->bump_freq_weight / tunables->power_bump_freq_weight_division;
+					else
+						new_freq = this_hispeed_freq * tunables->bump_freq_weight / tunables->bump_freq_weight_division;
 				}
 
 			if (tunables->index_update)
@@ -518,7 +524,7 @@ static void cpufreq_gabriel_plus_timer(unsigned long data)
 			if (tunables->power_save_max_local_load) {
 				if (new_freq > tunables->freq_calc_thresh &&
 					cpu_load < tunables->max_local_load / tunables->power_max_local_load_division) {
-					new_freq = pcpu->policy->cur * tunables->bump_freq_weight / tunables->bump_freq_weight_division;
+					new_freq = pcpu->policy->cur * tunables->bump_freq_weight / tunables->power_bump_freq_weight_division;
 					if (tunables->power_save_cpu_load) {
 						new_freq = pcpu->policy->max * cpu_load / tunables->power_cpu_load_max_division;
 					} else {
@@ -1418,6 +1424,25 @@ static ssize_t store_bump_freq_weight_division(struct cpufreq_gabriel_plus_tunab
 	return count;
 }
 
+static ssize_t show_power_bump_freq_weight_division(struct cpufreq_gabriel_plus_tunables
+		*tunables, char *buf)
+{
+	return sprintf(buf, "%lu\n", tunables->power_bump_freq_weight_division);
+}
+
+static ssize_t store_power_bump_freq_weight_division(struct cpufreq_gabriel_plus_tunables
+		*tunables, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long val;
+
+	ret = kstrtoul(buf, 0, &val);
+	if (ret < 0)
+		return ret;
+	tunables->power_bump_freq_weight_division = val;
+	return count;
+}
+
 static ssize_t show_power_cpu_load_max_division(struct cpufreq_gabriel_plus_tunables
 		*tunables, char *buf)
 {
@@ -1643,6 +1668,7 @@ show_store_gov_pol_sys(max_local_load_division);
 show_store_gov_pol_sys(power_max_local_load_division);
 show_store_gov_pol_sys(bump_freq_weight);
 show_store_gov_pol_sys(bump_freq_weight_division);
+show_store_gov_pol_sys(power_bump_freq_weight_division);
 show_store_gov_pol_sys(power_cpu_load_max_division);
 show_store_gov_pol_sys(cpu_load_max_division);
 show_store_gov_pol_sys(cpu_load_current_division);
@@ -1690,6 +1716,7 @@ gov_sys_pol_attr_rw(max_local_load_division);
 gov_sys_pol_attr_rw(power_max_local_load_division);
 gov_sys_pol_attr_rw(bump_freq_weight);
 gov_sys_pol_attr_rw(bump_freq_weight_division);
+gov_sys_pol_attr_rw(power_bump_freq_weight_division);
 gov_sys_pol_attr_rw(power_cpu_load_max_division);
 gov_sys_pol_attr_rw(cpu_load_max_division);
 gov_sys_pol_attr_rw(cpu_load_current_division);
@@ -1727,6 +1754,7 @@ static struct attribute *gabriel_plus_attributes_gov_sys[] = {
 	&power_max_local_load_division_gov_sys.attr,
 	&bump_freq_weight_gov_sys.attr,
 	&bump_freq_weight_division_gov_sys.attr,
+	&power_bump_freq_weight_division_gov_sys.attr,
 	&power_cpu_load_max_division_gov_sys.attr,
 	&cpu_load_max_division_gov_sys.attr,
 	&cpu_load_current_division_gov_sys.attr,
@@ -1771,6 +1799,7 @@ static struct attribute *gabriel_plus_attributes_gov_pol[] = {
 	&power_max_local_load_division_gov_pol.attr,
 	&bump_freq_weight_gov_pol.attr,
 	&bump_freq_weight_division_gov_pol.attr,
+	&power_bump_freq_weight_division_gov_pol.attr,
 	&power_cpu_load_max_division_gov_pol.attr,
 	&cpu_load_max_division_gov_pol.attr,
 	&cpu_load_current_division_gov_pol.attr,
@@ -1866,6 +1895,7 @@ static int cpufreq_governor_gabriel_plus(struct cpufreq_policy *policy,
 			tunables->timer_rate_idle_freq = DEFAULT_TIMER_RATE_IDLE_FREQ;
 			tunables->bump_freq_weight = DEFAULT_BUMP_FREQ_WEIGHT;
 			tunables->bump_freq_weight_division = DEFAULT_BUMP_FREQ_WEIGHT_DIVISION;
+			tunables->power_bump_freq_weight_division = DEFAULT_POWER_BUMP_FREQ_WEIGHT_DIVISION;
 			tunables->power_cpu_load_max_division = DEFAULT_POWER_CPU_LOAD_MAX_DIVISION;
 			tunables->cpu_load_max_division = DEFAULT_CPU_LOAD_MAX_DIVISION;
 			tunables->cpu_load_current_division = DEFAULT_CPU_LOAD_CURRENT_DIVISION;
