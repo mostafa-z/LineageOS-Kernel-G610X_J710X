@@ -181,6 +181,12 @@ struct cpufreq_gabriel_plus_tunables {
 	int pump_inc_step_at_min_freq;
 	int pump_dec_step;
 	int pump_dec_step_at_min_freq;
+	/*
+	 *Use agressive frequency step calculation,
+	 *above a given load threshold
+	 */
+	bool fastlane;
+	unsigned int fastlane_threshold;
 };
 
 /* For cases where we have single governor instance for system */
@@ -333,6 +339,16 @@ static unsigned int choose_target_freq(struct cpufreq_policy *policy,
 		}
 	}
 	return target_freq;
+}
+
+static unsigned int fastlane_freq(struct cpufreq_gabriel_plus_cpuinfo *pcpu,
+		unsigned int cpu_load)
+{
+	unsigned int freq;
+
+	freq = pcpu->policy->min + cpu_load * (pcpu->policy->max - pcpu->policy->min) / 100;
+
+	return freq;
 }
 
 static u64 update_load(int cpu)
@@ -511,8 +527,11 @@ static void cpufreq_gabriel_plus_timer(unsigned long data)
 			if (tunables->index_update)
 				index += pump_inc_step;
 			} else {
-				new_freq = choose_target_freq(pcpu->policy,
-					index, pump_inc_step, true);
+			    if (tunables->fastlane && cpu_load > tunables->fastlane_threshold)
+					new_freq = fastlane_freq(pcpu, cpu_load);
+			    else
+					new_freq = choose_target_freq(pcpu->policy,
+							index, pump_inc_step, true);
 
 				if (new_freq > tunables->freq_calc_thresh)
 					new_freq = pcpu->policy->cur * cpu_load / tunables->cpu_load_current_division;
@@ -521,8 +540,12 @@ static void cpufreq_gabriel_plus_timer(unsigned long data)
 					new_freq = this_hispeed_freq;
 			}
 		} else {
-			new_freq = choose_target_freq(pcpu->policy,
-					index, pump_dec_step, false);
+		    if (tunables->fastlane && cpu_load > tunables->fastlane_threshold)
+				new_freq = fastlane_freq(pcpu, cpu_load);
+		    else
+				new_freq = choose_target_freq(pcpu->policy,
+						index, pump_dec_step, false);
+
 			if (new_freq > tunables->hispeed_freq &&
 					pcpu->policy->cur < tunables->hispeed_freq)
 				new_freq = tunables->hispeed_freq;
@@ -1642,6 +1665,46 @@ static ssize_t store_power_save_max_local_load(struct cpufreq_gabriel_plus_tunab
 	return count;
 }
 
+static ssize_t show_fastlane(
+		struct cpufreq_gabriel_plus_tunables *tunables, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", tunables->fastlane);
+}
+
+static ssize_t store_fastlane(
+			struct cpufreq_gabriel_plus_tunables *tunables,
+			const char *buf, size_t count)
+{
+	int ret;
+	unsigned long val;
+
+	ret = kstrtoul(buf, 0, &val);
+	if (ret < 0)
+		return ret;
+	tunables->fastlane = val;
+	return count;
+}
+
+static ssize_t show_fastlane_threshold(
+		struct cpufreq_gabriel_plus_tunables *tunables, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", tunables->fastlane_threshold);
+}
+
+static ssize_t store_fastlane_threshold(
+			struct cpufreq_gabriel_plus_tunables *tunables,
+			const char *buf, size_t count)
+{
+	int ret;
+	unsigned long val;
+
+	ret = kstrtoul(buf, 0, &val);
+	if (ret < 0 || ret > 100)
+		return ret;
+	tunables->fastlane_threshold = val;
+	return count;
+}
+
 /*
  * Create show/store routines
  * - sys: One governor instance for complete SYSTEM
@@ -1714,6 +1777,8 @@ show_store_gov_pol_sys(fast_ramp_up);
 show_store_gov_pol_sys(fast_ramp_down);
 show_store_gov_pol_sys(power_save_cpu_load);
 show_store_gov_pol_sys(power_save_max_local_load);
+show_store_gov_pol_sys(fastlane);
+show_store_gov_pol_sys(fastlane_threshold);
 
 #define gov_sys_attr_rw(_name)						\
 static struct global_attr _name##_gov_sys =				\
@@ -1763,6 +1828,8 @@ gov_sys_pol_attr_rw(fast_ramp_up);
 gov_sys_pol_attr_rw(fast_ramp_down);
 gov_sys_pol_attr_rw(power_save_cpu_load);
 gov_sys_pol_attr_rw(power_save_max_local_load);
+gov_sys_pol_attr_rw(fastlane);
+gov_sys_pol_attr_rw(fastlane_threshold);
 
 /* One Governor instance for entire system */
 static struct attribute *gabriel_plus_attributes_gov_sys[] = {
@@ -1802,6 +1869,8 @@ static struct attribute *gabriel_plus_attributes_gov_sys[] = {
 	&fast_ramp_down_gov_sys.attr,
 	&power_save_cpu_load_gov_sys.attr,
 	&power_save_max_local_load_gov_sys.attr,
+	&fastlane_gov_sys.attr,
+	&fastlane_threshold_gov_sys.attr,
 	NULL,
 };
 
@@ -1848,6 +1917,8 @@ static struct attribute *gabriel_plus_attributes_gov_pol[] = {
 	&fast_ramp_down_gov_pol.attr,
 	&power_save_cpu_load_gov_pol.attr,
 	&power_save_max_local_load_gov_pol.attr,
+	&fastlane_gov_pol.attr,
+	&fastlane_threshold_gov_pol.attr,
 	NULL,
 };
 
@@ -1947,6 +2018,8 @@ static int cpufreq_governor_gabriel_plus(struct cpufreq_policy *policy,
 			tunables->go_hispeed_load_adt_freq_calc = true;
 			tunables->power_save_cpu_load = true;
 			tunables->power_save_max_local_load = true;
+			tunables->fastlane = false;
+			tunables->fastlane_threshold = 50;
 		} else {
 			memcpy(tunables, tuned_parameters[policy->cpu], sizeof(*tunables));
 			kfree(tuned_parameters[policy->cpu]);
