@@ -37,8 +37,6 @@ DATA_DIR=/data/.gabriel;
 # For CHARGER CHECK.
 echo "1" > /data/gabriel_cortex_sleep;
 
-rm -f /cache/uksm_state
-rm -f /cache/max_cpu_percentage
 rm -f /cache/power_efficient
 rm -f /cache/hmp_up_threshold
 rm -f /cache/hmp_down_threshold
@@ -84,12 +82,6 @@ RAM_CLEANUP()
 AWAKE_MODE()
 {
 if [ "$(cat /data/gabriel_cortex_sleep)" -eq "1" ]; then
-	echo "1586000" > /mp-cpufreq/cluster0_max_freq;
-	echo "1586000" > /mp-cpufreq/cluster1_max_freq;
-
-	echo "$(cat /cache/uksm_state)" > /sys/kernel/mm/uksm/run;
-	echo "$(cat /cache/max_cpu_percentage)" > /sys/kernel/mm/uksm/max_cpu_percentage;
-
 	echo "$(cat /cache/power_efficient)" > /sys/module/workqueue/parameters/power_efficient;
 
 	echo "$(cat /cache/hmp_up_threshold)" > /sys/kernel/hmp/up_threshold;
@@ -122,14 +114,6 @@ SLEEP_MODE()
 	CHARGER_STATE=$(cat /sys/devices/battery/power_supply/battery/charge_now)
 
 if [ "$CHARGER_STATE" -eq "0" ]; then
-	echo "1352000" > /mp-cpufreq/cluster0_max_freq;
-	echo "902000" > /mp-cpufreq/cluster1_max_freq;
-
-	echo "$(cat /sys/kernel/mm/uksm/run)" > /cache/uksm_state;
-	echo "1" > /sys/kernel/mm/uksm/run;
-	echo "$(cat /sys/kernel/mm/uksm/max_cpu_percentage)" > /cache/max_cpu_percentage;
-	echo "5" > /sys/kernel/mm/uksm/max_cpu_percentage;
-
 	echo "$(cat /sys/module/workqueue/parameters/power_efficient)" > /cache/power_efficient;
 	echo "1" > /sys/module/workqueue/parameters/power_efficient;
 
