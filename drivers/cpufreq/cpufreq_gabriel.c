@@ -61,7 +61,6 @@
 #define DEFAULT_TARGET_LOAD 80
 #define DEFAULT_TIMER_RATE (20 * USEC_PER_MSEC)
 #define DEFAULT_ABOVE_HISPEED_DELAY DEFAULT_TIMER_RATE
-#define DEFAULT_GO_HISPEED_LOAD 89
 #define DEFAULT_HISPEED_FREQ 902000
 #define DEFAULT_MIN_SAMPLE_TIME 0
 #define DEFAULT_TIMER_SLACK (1 * DEFAULT_TIMER_RATE)
@@ -69,14 +68,13 @@
 #define DEFAULT_TIMER_RATE_IDLE (60 * USEC_PER_MSEC)
 #define DEFAULT_TIMER_RATE_IDLE_FREQ 902000
 #define DEFAULT_IDLE_THRESHOLD 20
-#define DEFAULT_MAX_LOCAL_LOAD 100
 
-#define FREQ_RESPONSIVENESS			1248000
-
-#define PUMP_INC_STEP_AT_MIN_FREQ	6
-#define PUMP_INC_STEP				3
-#define PUMP_DEC_STEP_AT_MIN_FREQ	3
-#define PUMP_DEC_STEP				1
+#define DEFAULT_FREQ_TARGET_A 757000
+#define DEFAULT_FREQ_TARGET_B 1014000
+#define DEFAULT_FREQ_TARGET_C 1352000
+#define DEFAULT_CPU_LOAD_A 30
+#define DEFAULT_CPU_LOAD_B 50
+#define DEFAULT_CPU_LOAD_C 75
 
 struct cpufreq_gabriel_cpuinfo {
 	struct timer_list cpu_timer;
@@ -122,8 +120,6 @@ static unsigned int default_above_hispeed_delay[] = {
 struct cpufreq_gabriel_tunables {
 	int usage_count;
 	unsigned int hispeed_freq;
-	unsigned int freq_calc_thresh;
-	unsigned long go_hispeed_load;
 	spinlock_t target_loads_lock;
 	unsigned int *target_loads;
 	int ntarget_loads;
@@ -133,28 +129,20 @@ struct cpufreq_gabriel_tunables {
 	unsigned long timer_rate_idle;
 	unsigned long timer_rate_idle_freq;
 	unsigned long idle_threshold;
-	bool index_update;
-	unsigned long max_local_load;
 	spinlock_t above_hispeed_delay_lock;
 	unsigned int *above_hispeed_delay;
 	int nabove_hispeed_delay;
-	int boost_val;
-	int boostpulse_duration_val;
-	u64 boostpulse_endtime;
-	bool boosted;
 	int timer_slack_val;
 	bool io_is_busy;
 	unsigned int max_freq_hysteresis;
 	bool align_windows;
 	unsigned int *policy;
-	/*
-	 * CPUs frequency scaling
-	 */
-	int freq_responsiveness;
-	int pump_inc_step;
-	int pump_inc_step_at_min_freq;
-	int pump_dec_step;
-	int pump_dec_step_at_min_freq;
+	unsigned int freq_target_a;
+	unsigned int freq_target_b;
+	unsigned int freq_target_c;
+	unsigned long cpu_load_a;
+	unsigned long cpu_load_b;
+	unsigned long cpu_load_c;
 };
 
 /* For cases where we have single governor instance for system */
@@ -274,39 +262,14 @@ static unsigned int freq_to_targetload(
 	return ret;
 }
 
-static unsigned int choose_target_freq(struct cpufreq_policy *policy,
-					int index, unsigned int step, bool isup)
+static unsigned int adt_freq_selection(struct cpufreq_gabriel_cpuinfo *pcpu,
+		unsigned int cpu_load)
 {
-	struct cpufreq_frequency_table *table;
-	unsigned int target_freq = 0;
-	int i = 0;
+	unsigned int freq;
 
-	if (!policy || !step)
-		return 0;
+	freq = pcpu->policy->min + cpu_load * (pcpu->policy->max - pcpu->policy->min) / 100;
 
-	table = policy->freq_table;
-	if (isup) {
-		for (i = (index + 1); (table[i].frequency != CPUFREQ_TABLE_END); i++) {
-			if (table[i].frequency != CPUFREQ_ENTRY_INVALID) {
-				target_freq = table[i].frequency;
-				step--;
-				if (step == 0) {
-					break;
-				}
-			}
-		}
-	} else {
-		for (i = (index - 1); i >= 0; i--) {
-			if (table[i].frequency != CPUFREQ_ENTRY_INVALID) {
-				target_freq = table[i].frequency;
-				step--;
-				if (step == 0) {
-					break;
-				}
-			}
-		}
-	}
-	return target_freq;
+	return freq;
 }
 
 static u64 update_load(int cpu)
@@ -377,15 +340,10 @@ static void cpufreq_gabriel_timer(unsigned long data)
 		&per_cpu(cpuinfo, data);
 	struct cpufreq_gabriel_tunables *tunables =
 		pcpu->policy->governor_data;
-	unsigned int freq_calc_thresh = tunables->freq_calc_thresh;
 	unsigned int timer_rate_idle = tunables->timer_rate_idle;
 	unsigned int timer_rate_idle_freq = tunables->timer_rate_idle_freq;
 	unsigned int idle_threshold = tunables->idle_threshold;
-	unsigned int max_local_load = tunables->max_local_load;
 	unsigned int avg_near_prev_load, avg_long_prev_load;
-	unsigned int freq_responsiveness = tunables->freq_responsiveness;
-	int pump_inc_step = tunables->pump_inc_step;
-	int pump_dec_step = tunables->pump_dec_step;
 	unsigned int load_idx;
 	unsigned int new_freq;
 	unsigned int loadadjfreq;
@@ -426,18 +384,12 @@ static void cpufreq_gabriel_timer(unsigned long data)
 
 	/*switch timer to timer_rate_idle when system is idle to save power*/
 	if (pcpu->policy->cur == pcpu->policy->min
-		&& avg_long_prev_load <= idle_threshold
-		&& cpu_load <= idle_threshold
-		&& pcpu->policy->cur <= timer_rate_idle_freq)
-		tunables->timer_rate = timer_rate_idle;
+		&& avg_long_prev_load <= tunables->idle_threshold
+		&& cpu_load <= tunables->idle_threshold
+		&& pcpu->policy->cur <= tunables->timer_rate_idle_freq)
+		tunables->timer_rate = tunables->timer_rate_idle;
 	else
 		tunables->timer_rate = tunables->prev_timer_rate;
-
-	/* CPUs Online Scale Frequency*/
-	if (pcpu->policy->cur < freq_responsiveness) {
-		pump_inc_step = tunables->pump_inc_step_at_min_freq;
-		pump_dec_step = tunables->pump_dec_step_at_min_freq;
-	}
 
 	index = cpufreq_frequency_table_get_index(pcpu->policy, pcpu->policy->cur);
 	if (index < 0) {
@@ -449,38 +401,23 @@ static void cpufreq_gabriel_timer(unsigned long data)
 	do_div(cputime_speedadj, delta_time);
 	loadadjfreq = (unsigned int)cputime_speedadj * 100;
 	cpu_load = loadadjfreq / pcpu->policy->cur;
-	tunables->boosted = tunables->boost_val || now < tunables->boostpulse_endtime;
 
-	if (cpu_load >= tunables->go_hispeed_load || tunables->boosted) {
-		if (pcpu->policy->cur < tunables->hispeed_freq &&
-		    cpu_load <= tunables->max_local_load) {
-			new_freq = tunables->hispeed_freq;
+	new_freq = adt_freq_selection(pcpu, cpu_load);
 
-		if (tunables->index_update)
-			index += pump_inc_step;
-		} else {
-			new_freq = choose_target_freq(pcpu->policy,
-				index, pump_inc_step, true);
+	if (cpu_load <= tunables->idle_threshold)
+		new_freq = pcpu->policy->cpuinfo.min_freq;
 
-			if (new_freq > tunables->freq_calc_thresh)
-				new_freq = pcpu->policy->max * cpu_load / 100;
-
-			if (new_freq < tunables->hispeed_freq)
-				new_freq = tunables->hispeed_freq;
-		}
-	} else {
-		new_freq = choose_target_freq(pcpu->policy,
-				index, pump_dec_step, false);
-		if (new_freq > tunables->hispeed_freq &&
-				pcpu->policy->cur < tunables->hispeed_freq)
-			new_freq = tunables->hispeed_freq;
-
-		if (tunables->index_update)
-			index -= pump_dec_step;
-
-		if (new_freq > tunables->freq_calc_thresh)
-			new_freq = pcpu->policy->max * cpu_load / 100;
-	}
+	if (new_freq > tunables->freq_target_c
+		&& cpu_load >= tunables->cpu_load_c)
+			new_freq = tunables->freq_target_c;
+	else if (new_freq > tunables->freq_target_b
+		&& cpu_load >= tunables->cpu_load_b
+		&& cpu_load < tunables->cpu_load_c)
+			new_freq = tunables->freq_target_b;
+	else if (new_freq > tunables->freq_target_a
+		&& cpu_load >= tunables->cpu_load_a
+		&& cpu_load < tunables->cpu_load_b)
+			new_freq = tunables->freq_target_a;
 
 	if (cpufreq_frequency_table_target(pcpu->policy, pcpu->freq_table,
 					   new_freq, CPUFREQ_RELATION_L,
@@ -491,8 +428,7 @@ static void cpufreq_gabriel_timer(unsigned long data)
 
 	new_freq = pcpu->freq_table[index].frequency;
 
-	if (cpu_load <= tunables->max_local_load &&
-	    pcpu->policy->cur >= tunables->hispeed_freq &&
+	if (pcpu->policy->cur >= tunables->hispeed_freq &&
 	    new_freq > pcpu->policy->cur &&
 	    now - pcpu->pol_hispeed_val_time <
 	    freq_to_above_hispeed_delay(tunables, pcpu->policy->cur)) {
@@ -537,7 +473,7 @@ static void cpufreq_gabriel_timer(unsigned long data)
 	 * (or the indefinite boost is turned off).
 	 */
 
-	if (!tunables->boosted || new_freq > tunables->hispeed_freq) {
+	if (new_freq > tunables->hispeed_freq) {
 		pcpu->floor_freq = new_freq;
 		if (pcpu->target_freq >= pcpu->policy->cur ||
 		    new_freq >= pcpu->policy->cur)
@@ -681,47 +617,6 @@ static int cpufreq_gabriel_speedch_task(void *data)
 	}
 
 	return 0;
-}
-
-static void cpufreq_gabriel_boost(struct cpufreq_gabriel_tunables *tunables)
-{
-	int i;
-	int anyboost = 0;
-	unsigned long flags[2];
-	struct cpufreq_gabriel_cpuinfo *pcpu;
-	struct cpumask boost_mask;
-	struct cpufreq_policy *policy = container_of(tunables->policy,
-						struct cpufreq_policy, policy);
-
-	tunables->boosted = true;
-
-	spin_lock_irqsave(&speedchange_cpumask_lock, flags[0]);
-
-	if (have_governor_per_policy())
-		cpumask_copy(&boost_mask, policy->cpus);
-	else
-		cpumask_copy(&boost_mask, cpu_online_mask);
-
-	for_each_cpu(i, &boost_mask) {
-		pcpu = &per_cpu(cpuinfo, i);
-		if (tunables != pcpu->policy->governor_data)
-			continue;
-
-		spin_lock_irqsave(&pcpu->target_freq_lock, flags[1]);
-		if (pcpu->target_freq < tunables->hispeed_freq) {
-			pcpu->target_freq = tunables->hispeed_freq;
-			cpumask_set_cpu(i, &speedchange_cpumask);
-			pcpu->pol_hispeed_val_time =
-				ktime_to_us(ktime_get());
-			anyboost = 1;
-		}
-		spin_unlock_irqrestore(&pcpu->target_freq_lock, flags[1]);
-	}
-
-	spin_unlock_irqrestore(&speedchange_cpumask_lock, flags[0]);
-
-	if (anyboost && speedch_task)
-		wake_up_process(speedch_task);
 }
 
 static int cpufreq_gabriel_notifier(
@@ -922,13 +817,13 @@ static ssize_t store_hispeed_freq(struct cpufreq_gabriel_tunables *tunables,
 	return count;
 }
 
-static ssize_t show_freq_calc_thresh(struct cpufreq_gabriel_tunables *tunables,
+static ssize_t show_freq_target_a(struct cpufreq_gabriel_tunables *tunables,
 		char *buf)
 {
-	return sprintf(buf, "%u\n", tunables->freq_calc_thresh);
+	return sprintf(buf, "%u\n", tunables->freq_target_a);
 }
 
-static ssize_t store_freq_calc_thresh(struct cpufreq_gabriel_tunables *tunables,
+static ssize_t store_freq_target_a(struct cpufreq_gabriel_tunables *tunables,
 		const char *buf, size_t count)
 {
 	int ret;
@@ -937,7 +832,102 @@ static ssize_t store_freq_calc_thresh(struct cpufreq_gabriel_tunables *tunables,
 	ret = kstrtoul(buf, 0, &val);
 	if (ret < 0)
 		return ret;
-	tunables->freq_calc_thresh = val;
+	tunables->freq_target_a = val;
+	return count;
+}
+
+static ssize_t show_freq_target_b(struct cpufreq_gabriel_tunables *tunables,
+		char *buf)
+{
+	return sprintf(buf, "%u\n", tunables->freq_target_b);
+}
+
+static ssize_t store_freq_target_b(struct cpufreq_gabriel_tunables *tunables,
+		const char *buf, size_t count)
+{
+	int ret;
+	long unsigned int val;
+
+	ret = kstrtoul(buf, 0, &val);
+	if (ret < 0)
+		return ret;
+	tunables->freq_target_b = val;
+	return count;
+}
+
+static ssize_t show_freq_target_c(struct cpufreq_gabriel_tunables *tunables,
+		char *buf)
+{
+	return sprintf(buf, "%u\n", tunables->freq_target_c);
+}
+
+static ssize_t store_freq_target_c(struct cpufreq_gabriel_tunables *tunables,
+		const char *buf, size_t count)
+{
+	int ret;
+	long unsigned int val;
+
+	ret = kstrtoul(buf, 0, &val);
+	if (ret < 0)
+		return ret;
+	tunables->freq_target_c = val;
+	return count;
+}
+
+static ssize_t show_cpu_load_a(struct cpufreq_gabriel_tunables
+		*tunables, char *buf)
+{
+	return sprintf(buf, "%lu\n", tunables->cpu_load_a);
+}
+
+static ssize_t store_cpu_load_a(struct cpufreq_gabriel_tunables
+		*tunables, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long val;
+
+	ret = kstrtoul(buf, 0, &val);
+	if (ret < 0)
+		return ret;
+	tunables->cpu_load_a = val;
+	return count;
+}
+
+static ssize_t show_cpu_load_b(struct cpufreq_gabriel_tunables
+		*tunables, char *buf)
+{
+	return sprintf(buf, "%lu\n", tunables->cpu_load_b);
+}
+
+static ssize_t store_cpu_load_b(struct cpufreq_gabriel_tunables
+		*tunables, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long val;
+
+	ret = kstrtoul(buf, 0, &val);
+	if (ret < 0)
+		return ret;
+	tunables->cpu_load_b = val;
+	return count;
+}
+
+static ssize_t show_cpu_load_c(struct cpufreq_gabriel_tunables
+		*tunables, char *buf)
+{
+	return sprintf(buf, "%lu\n", tunables->cpu_load_c);
+}
+
+static ssize_t store_cpu_load_c(struct cpufreq_gabriel_tunables
+		*tunables, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long val;
+
+	ret = kstrtoul(buf, 0, &val);
+	if (ret < 0)
+		return ret;
+	tunables->cpu_load_c = val;
 	return count;
 }
 
@@ -961,25 +951,6 @@ static ssize_t store_##file_name(					\
 	return count;							\
 }
 show_store_one(max_freq_hysteresis);
-
-static ssize_t show_go_hispeed_load(struct cpufreq_gabriel_tunables
-		*tunables, char *buf)
-{
-	return sprintf(buf, "%lu\n", tunables->go_hispeed_load);
-}
-
-static ssize_t store_go_hispeed_load(struct cpufreq_gabriel_tunables
-		*tunables, const char *buf, size_t count)
-{
-	int ret;
-	unsigned long val;
-
-	ret = kstrtoul(buf, 0, &val);
-	if (ret < 0)
-		return ret;
-	tunables->go_hispeed_load = val;
-	return count;
-}
 
 static ssize_t show_min_sample_time(struct cpufreq_gabriel_tunables
 		*tunables, char *buf)
@@ -1043,74 +1014,6 @@ static ssize_t store_timer_slack(struct cpufreq_gabriel_tunables *tunables,
 		return ret;
 
 	tunables->timer_slack_val = val;
-	return count;
-}
-
-static ssize_t show_boost(struct cpufreq_gabriel_tunables *tunables,
-			  char *buf)
-{
-	return sprintf(buf, "%d\n", tunables->boost_val);
-}
-
-static ssize_t store_boost(struct cpufreq_gabriel_tunables *tunables,
-			   const char *buf, size_t count)
-{
-	int ret;
-	unsigned long val;
-
-	ret = kstrtoul(buf, 0, &val);
-	if (ret < 0)
-		return ret;
-
-	tunables->boost_val = val;
-
-	if (tunables->boost_val) {
-		trace_cpufreq_gabriel_boost("on");
-		if (!tunables->boosted)
-			cpufreq_gabriel_boost(tunables);
-	} else {
-		tunables->boostpulse_endtime = ktime_to_us(ktime_get());
-		trace_cpufreq_gabriel_unboost("off");
-	}
-
-	return count;
-}
-
-static ssize_t store_boostpulse(struct cpufreq_gabriel_tunables *tunables,
-				const char *buf, size_t count)
-{
-	int ret;
-	unsigned long val;
-
-	ret = kstrtoul(buf, 0, &val);
-	if (ret < 0)
-		return ret;
-
-	tunables->boostpulse_endtime = ktime_to_us(ktime_get()) +
-		tunables->boostpulse_duration_val;
-	trace_cpufreq_gabriel_boost("pulse");
-	if (!tunables->boosted)
-		cpufreq_gabriel_boost(tunables);
-	return count;
-}
-
-static ssize_t show_boostpulse_duration(struct cpufreq_gabriel_tunables
-		*tunables, char *buf)
-{
-	return sprintf(buf, "%d\n", tunables->boostpulse_duration_val);
-}
-
-static ssize_t store_boostpulse_duration(struct cpufreq_gabriel_tunables
-		*tunables, const char *buf, size_t count)
-{
-	int ret;
-	unsigned long val;
-
-	ret = kstrtoul(buf, 0, &val);
-	if (ret < 0)
-		return ret;
-
-	tunables->boostpulse_duration_val = val;
 	return count;
 }
 
@@ -1220,177 +1123,6 @@ static ssize_t store_idle_threshold(struct cpufreq_gabriel_tunables
 	return count;
 }
 
-static ssize_t show_max_local_load(struct cpufreq_gabriel_tunables
-		*tunables, char *buf)
-{
-	return sprintf(buf, "%lu\n", tunables->max_local_load);
-}
-
-static ssize_t store_max_local_load(struct cpufreq_gabriel_tunables
-		*tunables, const char *buf, size_t count)
-{
-	int ret;
-	unsigned long val;
-
-	ret = kstrtoul(buf, 0, &val);
-	if (ret < 0)
-		return ret;
-	tunables->max_local_load = val;
-	return count;
-}
-
-/* freq_responsiveness */
-static ssize_t show_freq_responsiveness(struct cpufreq_gabriel_tunables *tunables,
-		char *buf)
-{
-	return sprintf(buf, "%d\n", tunables->freq_responsiveness);
-}
-
-static ssize_t store_freq_responsiveness(struct cpufreq_gabriel_tunables *tunables,
-		const char *buf, size_t count)
-{
-	int input;
-	int ret;
-
-	ret = sscanf(buf, "%d", &input);
-	if (ret != 1)
-		return -EINVAL;
-
-	if (input == tunables->freq_responsiveness)
-		return count;
-
-	tunables->freq_responsiveness = input;
-
-	return count;
-}
-
-/* pump_inc_step_at_min_freq */
-static ssize_t show_pump_inc_step_at_min_freq(struct cpufreq_gabriel_tunables *tunables,
-		char *buf)
-{
-	return sprintf(buf, "%d\n", tunables->pump_inc_step_at_min_freq);
-}
-
-static ssize_t store_pump_inc_step_at_min_freq(struct cpufreq_gabriel_tunables *tunables,
-		const char *buf, size_t count)
-{
-	int input;
-	int ret;
-
-	ret = sscanf(buf, "%d", &input);
-	if (ret != 1)
-		return -EINVAL;
-
-	input = min(max(1, input), 6);
-
-	if (input == tunables->pump_inc_step_at_min_freq)
-		return count;
-
-	tunables->pump_inc_step_at_min_freq = input;
-
-	return count;
-}
-
-/* pump_inc_step */
-static ssize_t show_pump_inc_step(struct cpufreq_gabriel_tunables *tunables,
-		char *buf)
-{
-	return sprintf(buf, "%d\n", tunables->pump_inc_step);
-}
-
-static ssize_t store_pump_inc_step(struct cpufreq_gabriel_tunables *tunables,
-		const char *buf, size_t count)
-{
-	int input;
-	int ret;
-
-	ret = sscanf(buf, "%d", &input);
-	if (ret != 1)
-		return -EINVAL;
-
-	input = min(max(1, input), 6);
-
-	if (input == tunables->pump_inc_step)
-		return count;
-
-	tunables->pump_inc_step = input;
-
-	return count;
-}
-
-/* pump_dec_step_at_min_freq */
-static ssize_t show_pump_dec_step_at_min_freq(struct cpufreq_gabriel_tunables *tunables,
-		char *buf)
-{
-	return sprintf(buf, "%d\n", tunables->pump_dec_step_at_min_freq);
-}
-
-static ssize_t store_pump_dec_step_at_min_freq(struct cpufreq_gabriel_tunables *tunables,
-		const char *buf, size_t count)
-{
-	int input;
-	int ret;
-
-	ret = sscanf(buf, "%d", &input);
-	if (ret != 1)
-		return -EINVAL;
-
-	input = min(max(1, input), 6);
-
-	if (input == tunables->pump_dec_step_at_min_freq)
-		return count;
-
-	tunables->pump_dec_step_at_min_freq = input;
-
-	return count;
-}
-
-/* pump_dec_step */
-static ssize_t show_pump_dec_step(struct cpufreq_gabriel_tunables *tunables,
-		char *buf)
-{
-	return sprintf(buf, "%d\n", tunables->pump_dec_step);
-}
-
-static ssize_t store_pump_dec_step(struct cpufreq_gabriel_tunables *tunables,
-		const char *buf, size_t count)
-{
-	int input;
-	int ret;
-
-	ret = sscanf(buf, "%d", &input);
-	if (ret != 1)
-		return -EINVAL;
-
-	input = min(max(1, input), 6);
-
-	if (input == tunables->pump_dec_step)
-		return count;
-
-	tunables->pump_dec_step = input;
-
-	return count;
-}
-
-static ssize_t show_index_update(struct cpufreq_gabriel_tunables
-		*tunables, char *buf)
-{
-	return sprintf(buf, "%u\n", tunables->index_update);
-}
-
-static ssize_t store_index_update(struct cpufreq_gabriel_tunables
-		*tunables, const char *buf, size_t count)
-{
-	int ret;
-	unsigned long val;
-
-	ret = kstrtoul(buf, 0, &val);
-	if (ret < 0)
-		return ret;
-	tunables->index_update = val;
-	return count;
-}
-
 /*
  * Create show/store routines
  * - sys: One governor instance for complete SYSTEM
@@ -1430,27 +1162,21 @@ store_gov_pol_sys(file_name)
 show_store_gov_pol_sys(target_loads);
 show_store_gov_pol_sys(above_hispeed_delay);
 show_store_gov_pol_sys(hispeed_freq);
-show_store_gov_pol_sys(freq_calc_thresh);
-show_store_gov_pol_sys(go_hispeed_load);
 show_store_gov_pol_sys(min_sample_time);
 show_store_gov_pol_sys(timer_rate);
 show_store_gov_pol_sys(timer_rate_idle);
 show_store_gov_pol_sys(timer_rate_idle_freq);
 show_store_gov_pol_sys(idle_threshold);
-show_store_gov_pol_sys(index_update);
-show_store_gov_pol_sys(max_local_load);
 show_store_gov_pol_sys(timer_slack);
-show_store_gov_pol_sys(boost);
-store_gov_pol_sys(boostpulse);
-show_store_gov_pol_sys(boostpulse_duration);
 show_store_gov_pol_sys(io_is_busy);
 show_store_gov_pol_sys(align_windows);
 show_store_gov_pol_sys(max_freq_hysteresis);
-show_store_gov_pol_sys(freq_responsiveness);
-show_store_gov_pol_sys(pump_inc_step_at_min_freq);
-show_store_gov_pol_sys(pump_inc_step);
-show_store_gov_pol_sys(pump_dec_step_at_min_freq);
-show_store_gov_pol_sys(pump_dec_step);
+show_store_gov_pol_sys(freq_target_a);
+show_store_gov_pol_sys(freq_target_b);
+show_store_gov_pol_sys(freq_target_c);
+show_store_gov_pol_sys(cpu_load_a);
+show_store_gov_pol_sys(cpu_load_b);
+show_store_gov_pol_sys(cpu_load_c);
 
 #define gov_sys_attr_rw(_name)						\
 static struct global_attr _name##_gov_sys =				\
@@ -1467,59 +1193,42 @@ __ATTR(_name, 0664, show_##_name##_gov_pol, store_##_name##_gov_pol)
 gov_sys_pol_attr_rw(target_loads);
 gov_sys_pol_attr_rw(above_hispeed_delay);
 gov_sys_pol_attr_rw(hispeed_freq);
-gov_sys_pol_attr_rw(freq_calc_thresh);
-gov_sys_pol_attr_rw(go_hispeed_load);
 gov_sys_pol_attr_rw(min_sample_time);
 gov_sys_pol_attr_rw(timer_rate);
 gov_sys_pol_attr_rw(timer_rate_idle);
 gov_sys_pol_attr_rw(timer_rate_idle_freq);
 gov_sys_pol_attr_rw(idle_threshold);
-gov_sys_pol_attr_rw(index_update);
-gov_sys_pol_attr_rw(max_local_load);
 gov_sys_pol_attr_rw(timer_slack);
-gov_sys_pol_attr_rw(boost);
-gov_sys_pol_attr_rw(boostpulse_duration);
 gov_sys_pol_attr_rw(io_is_busy);
 gov_sys_pol_attr_rw(align_windows);
 gov_sys_pol_attr_rw(max_freq_hysteresis);
-gov_sys_pol_attr_rw(freq_responsiveness);
-gov_sys_pol_attr_rw(pump_inc_step_at_min_freq);
-gov_sys_pol_attr_rw(pump_inc_step);
-gov_sys_pol_attr_rw(pump_dec_step_at_min_freq);
-gov_sys_pol_attr_rw(pump_dec_step);
-
-static struct global_attr boostpulse_gov_sys =
-	__ATTR(boostpulse, 0200, NULL, store_boostpulse_gov_sys);
-
-static struct freq_attr boostpulse_gov_pol =
-	__ATTR(boostpulse, 0200, NULL, store_boostpulse_gov_pol);
+gov_sys_pol_attr_rw(freq_target_a);
+gov_sys_pol_attr_rw(freq_target_b);
+gov_sys_pol_attr_rw(freq_target_c);
+gov_sys_pol_attr_rw(cpu_load_a);
+gov_sys_pol_attr_rw(cpu_load_b);
+gov_sys_pol_attr_rw(cpu_load_c);
 
 /* One Governor instance for entire system */
 static struct attribute *gabriel_attributes_gov_sys[] = {
 	&target_loads_gov_sys.attr,
 	&above_hispeed_delay_gov_sys.attr,
 	&hispeed_freq_gov_sys.attr,
-	&freq_calc_thresh_gov_sys.attr,
-	&go_hispeed_load_gov_sys.attr,
 	&min_sample_time_gov_sys.attr,
 	&timer_rate_gov_sys.attr,
 	&timer_rate_idle_gov_sys.attr,
 	&timer_rate_idle_freq_gov_sys.attr,
 	&idle_threshold_gov_sys.attr,
-	&index_update_gov_sys.attr,
-	&max_local_load_gov_sys.attr,
 	&timer_slack_gov_sys.attr,
-	&boost_gov_sys.attr,
-	&boostpulse_gov_sys.attr,
-	&boostpulse_duration_gov_sys.attr,
 	&io_is_busy_gov_sys.attr,
 	&align_windows_gov_sys.attr,
 	&max_freq_hysteresis_gov_sys.attr,
-	&freq_responsiveness_gov_sys.attr,
-	&pump_inc_step_at_min_freq_gov_sys.attr,
-	&pump_inc_step_gov_sys.attr,
-	&pump_dec_step_at_min_freq_gov_sys.attr,
-	&pump_dec_step_gov_sys.attr,
+	&freq_target_a_gov_sys.attr,
+	&freq_target_b_gov_sys.attr,
+	&freq_target_c_gov_sys.attr,
+	&cpu_load_a_gov_sys.attr,
+	&cpu_load_b_gov_sys.attr,
+	&cpu_load_c_gov_sys.attr,
 	NULL,
 };
 
@@ -1533,27 +1242,21 @@ static struct attribute *gabriel_attributes_gov_pol[] = {
 	&target_loads_gov_pol.attr,
 	&above_hispeed_delay_gov_pol.attr,
 	&hispeed_freq_gov_pol.attr,
-	&freq_calc_thresh_gov_pol.attr,
-	&go_hispeed_load_gov_pol.attr,
 	&min_sample_time_gov_pol.attr,
 	&timer_rate_gov_pol.attr,
 	&timer_rate_idle_gov_pol.attr,
 	&timer_rate_idle_freq_gov_pol.attr,
 	&idle_threshold_gov_pol.attr,
-	&index_update_gov_pol.attr,
-	&max_local_load_gov_pol.attr,
 	&timer_slack_gov_pol.attr,
-	&boost_gov_pol.attr,
-	&boostpulse_gov_pol.attr,
-	&boostpulse_duration_gov_pol.attr,
 	&io_is_busy_gov_pol.attr,
 	&align_windows_gov_pol.attr,
 	&max_freq_hysteresis_gov_pol.attr,
-	&freq_responsiveness_gov_pol.attr,
-	&pump_inc_step_at_min_freq_gov_pol.attr,
-	&pump_inc_step_gov_pol.attr,
-	&pump_dec_step_at_min_freq_gov_pol.attr,
-	&pump_dec_step_gov_pol.attr,
+	&freq_target_a_gov_pol.attr,
+	&freq_target_b_gov_pol.attr,
+	&freq_target_c_gov_pol.attr,
+	&cpu_load_a_gov_pol.attr,
+	&cpu_load_b_gov_pol.attr,
+	&cpu_load_c_gov_pol.attr,
 	NULL,
 };
 
@@ -1621,7 +1324,6 @@ static int cpufreq_governor_gabriel(struct cpufreq_policy *policy,
 			tunables->above_hispeed_delay = default_above_hispeed_delay;
 			tunables->nabove_hispeed_delay =
 				ARRAY_SIZE(default_above_hispeed_delay);
-			tunables->go_hispeed_load = DEFAULT_GO_HISPEED_LOAD;
 			tunables->hispeed_freq = DEFAULT_HISPEED_FREQ;
 			tunables->target_loads = default_target_loads;
 			tunables->ntarget_loads = ARRAY_SIZE(default_target_loads);
@@ -1631,15 +1333,13 @@ static int cpufreq_governor_gabriel(struct cpufreq_policy *policy,
 			tunables->timer_rate_idle = DEFAULT_TIMER_RATE_IDLE;
 			tunables->timer_rate_idle_freq = DEFAULT_TIMER_RATE_IDLE_FREQ;
 			tunables->idle_threshold= DEFAULT_IDLE_THRESHOLD;
-			tunables->max_local_load= DEFAULT_MAX_LOCAL_LOAD;
-			tunables->boostpulse_duration_val = DEFAULT_MIN_SAMPLE_TIME;
 			tunables->timer_slack_val = DEFAULT_TIMER_SLACK;
-			tunables->freq_responsiveness = FREQ_RESPONSIVENESS;
-			tunables->pump_inc_step_at_min_freq = PUMP_INC_STEP_AT_MIN_FREQ;
-			tunables->pump_inc_step = PUMP_INC_STEP;
-			tunables->pump_dec_step = PUMP_DEC_STEP;
-			tunables->pump_dec_step_at_min_freq = PUMP_DEC_STEP_AT_MIN_FREQ;
-			tunables->index_update = true;
+			tunables->freq_target_a = DEFAULT_FREQ_TARGET_A;
+			tunables->freq_target_b = DEFAULT_FREQ_TARGET_B;
+			tunables->freq_target_c = DEFAULT_FREQ_TARGET_C;
+			tunables->cpu_load_a = DEFAULT_CPU_LOAD_A;
+			tunables->cpu_load_b = DEFAULT_CPU_LOAD_B;
+			tunables->cpu_load_c = DEFAULT_CPU_LOAD_C;
 		} else {
 			memcpy(tunables, tuned_parameters[policy->cpu], sizeof(*tunables));
 			kfree(tuned_parameters[policy->cpu]);
@@ -1711,7 +1411,6 @@ static int cpufreq_governor_gabriel(struct cpufreq_policy *policy,
 		freq_table = cpufreq_frequency_get_table(policy->cpu);
 		if (!tunables->hispeed_freq)
 			tunables->hispeed_freq = policy->max;
-		tunables->freq_calc_thresh = policy->cpuinfo.min_freq;
 
 		for_each_cpu(j, policy->cpus) {
 			pcpu = &per_cpu(cpuinfo, j);
