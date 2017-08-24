@@ -69,10 +69,11 @@
 #define DEFAULT_TIMER_RATE_IDLE_FREQ 902000
 #define DEFAULT_IDLE_THRESHOLD 20
 
+#define DEFAULT_FREQ_CALC_DIVISION 100
 #define DEFAULT_FREQ_TARGET_A 757000
 #define DEFAULT_FREQ_TARGET_B 1014000
 #define DEFAULT_FREQ_TARGET_C 1352000
-#define DEFAULT_CPU_LOAD_A 30
+#define DEFAULT_CPU_LOAD_A 25
 #define DEFAULT_CPU_LOAD_B 50
 #define DEFAULT_CPU_LOAD_C 75
 
@@ -137,6 +138,8 @@ struct cpufreq_gabriel_tunables {
 	unsigned int max_freq_hysteresis;
 	bool align_windows;
 	unsigned int *policy;
+	bool freq_target_enable;
+	unsigned long freq_calc_division;
 	unsigned int freq_target_a;
 	unsigned int freq_target_b;
 	unsigned int freq_target_c;
@@ -265,9 +268,16 @@ static unsigned int freq_to_targetload(
 static unsigned int adt_freq_selection(struct cpufreq_gabriel_cpuinfo *pcpu,
 		unsigned int cpu_load)
 {
+	struct cpufreq_gabriel_tunables *tunables =
+		pcpu->policy->governor_data;
+	unsigned int freq_target_enable = tunables->freq_target_enable;
+	unsigned int freq_calc_division = tunables->freq_calc_division;
 	unsigned int freq;
 
-	freq = pcpu->policy->min + cpu_load * (pcpu->policy->max - pcpu->policy->min) / 100;
+	if (tunables->freq_target_enable)
+		freq = pcpu->policy->min + cpu_load * (pcpu->policy->max - pcpu->policy->min) / tunables->freq_calc_division;
+	else
+		freq = cpu_load * (pcpu->policy->max - pcpu->policy->min) / tunables->freq_calc_division;
 
 	return freq;
 }
@@ -817,6 +827,44 @@ static ssize_t store_hispeed_freq(struct cpufreq_gabriel_tunables *tunables,
 	return count;
 }
 
+static ssize_t show_freq_target_enable(struct cpufreq_gabriel_tunables *tunables,
+		char *buf)
+{
+	return sprintf(buf, "%u\n", tunables->freq_target_enable);
+}
+
+static ssize_t store_freq_target_enable(struct cpufreq_gabriel_tunables *tunables,
+		const char *buf, size_t count)
+{
+	int ret;
+	unsigned long val;
+
+	ret = kstrtoul(buf, 0, &val);
+	if (ret < 0)
+		return ret;
+	tunables->freq_target_enable = val;
+	return count;
+}
+
+static ssize_t show_freq_calc_division(struct cpufreq_gabriel_tunables
+		*tunables, char *buf)
+{
+	return sprintf(buf, "%lu\n", tunables->freq_calc_division);
+}
+
+static ssize_t store_freq_calc_division(struct cpufreq_gabriel_tunables
+		*tunables, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long val;
+
+	ret = kstrtoul(buf, 0, &val);
+	if (ret < 0)
+		return ret;
+	tunables->freq_calc_division = val;
+	return count;
+}
+
 static ssize_t show_freq_target_a(struct cpufreq_gabriel_tunables *tunables,
 		char *buf)
 {
@@ -1171,6 +1219,8 @@ show_store_gov_pol_sys(timer_slack);
 show_store_gov_pol_sys(io_is_busy);
 show_store_gov_pol_sys(align_windows);
 show_store_gov_pol_sys(max_freq_hysteresis);
+show_store_gov_pol_sys(freq_target_enable);
+show_store_gov_pol_sys(freq_calc_division);
 show_store_gov_pol_sys(freq_target_a);
 show_store_gov_pol_sys(freq_target_b);
 show_store_gov_pol_sys(freq_target_c);
@@ -1202,6 +1252,8 @@ gov_sys_pol_attr_rw(timer_slack);
 gov_sys_pol_attr_rw(io_is_busy);
 gov_sys_pol_attr_rw(align_windows);
 gov_sys_pol_attr_rw(max_freq_hysteresis);
+gov_sys_pol_attr_rw(freq_target_enable);
+gov_sys_pol_attr_rw(freq_calc_division);
 gov_sys_pol_attr_rw(freq_target_a);
 gov_sys_pol_attr_rw(freq_target_b);
 gov_sys_pol_attr_rw(freq_target_c);
@@ -1223,6 +1275,8 @@ static struct attribute *gabriel_attributes_gov_sys[] = {
 	&io_is_busy_gov_sys.attr,
 	&align_windows_gov_sys.attr,
 	&max_freq_hysteresis_gov_sys.attr,
+	&freq_target_enable_gov_sys.attr,
+	&freq_calc_division_gov_sys.attr,
 	&freq_target_a_gov_sys.attr,
 	&freq_target_b_gov_sys.attr,
 	&freq_target_c_gov_sys.attr,
@@ -1251,6 +1305,8 @@ static struct attribute *gabriel_attributes_gov_pol[] = {
 	&io_is_busy_gov_pol.attr,
 	&align_windows_gov_pol.attr,
 	&max_freq_hysteresis_gov_pol.attr,
+	&freq_target_enable_gov_pol.attr,
+	&freq_calc_division_gov_pol.attr,
 	&freq_target_a_gov_pol.attr,
 	&freq_target_b_gov_pol.attr,
 	&freq_target_c_gov_pol.attr,
@@ -1334,6 +1390,7 @@ static int cpufreq_governor_gabriel(struct cpufreq_policy *policy,
 			tunables->timer_rate_idle_freq = DEFAULT_TIMER_RATE_IDLE_FREQ;
 			tunables->idle_threshold= DEFAULT_IDLE_THRESHOLD;
 			tunables->timer_slack_val = DEFAULT_TIMER_SLACK;
+			tunables->freq_calc_division = DEFAULT_FREQ_CALC_DIVISION;
 			tunables->freq_target_a = DEFAULT_FREQ_TARGET_A;
 			tunables->freq_target_b = DEFAULT_FREQ_TARGET_B;
 			tunables->freq_target_c = DEFAULT_FREQ_TARGET_C;
