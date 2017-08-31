@@ -26,7 +26,7 @@
 #define _KBASE_CONFIG_DEFAULTS_H_
 
 /* Include mandatory definitions per platform */
-#include <mali_kbase_config_platform.h>
+#include <platform/exynos/mali_kbase_config_platform.h>
 
 /**
  * Irq throttle. It is the minimum desired time in between two
