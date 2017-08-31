@@ -88,7 +88,6 @@ static int __add_kek(kek_pack_t *pack, kek_t *kek, kek_item_t *item) {
 	if(kek == NULL) return -EINVAL;
 	if(pack == NULL) return -EINVAL;
 
-
 	INIT_LIST_HEAD(&item->list);
 	item->kek_type = kek->type;
 	memcpy(&item->kek, kek, sizeof(kek_t));
@@ -194,7 +193,7 @@ int add_kek(int engine_id, kek_t *kek) {
 		spin_lock(&pack->kek_list_lock);
 		if(find_kek_item(pack, kek->type)) {
 			spin_unlock(&pack->kek_list_lock);
-			kzfree(item);
+			kzfree(item);		
 			return -EEXIST;
 		}
 		rc = __add_kek(pack, kek, item);

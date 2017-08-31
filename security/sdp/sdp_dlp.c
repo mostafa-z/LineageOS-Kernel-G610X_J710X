@@ -61,7 +61,7 @@ static void dlp_dump_list(void) {
 			printk("DLP : extensions : (empty)\n");
 		}
 	}
-	mutex_unlock(&dlp_info.list_mutex);	
+	mutex_unlock(&dlp_info.list_mutex);
 }
 #endif
 
@@ -137,9 +137,9 @@ static int dlp_lock_setting(void __user *argp, bool lock) {
 			return -EFAULT;
 		}
 	}
-		mutex_lock(&dlp_info.list_mutex);
-		tmp->lock = lock;
-		mutex_unlock(&dlp_info.list_mutex);
+	mutex_lock(&dlp_info.list_mutex);
+	tmp->lock = lock;
+	mutex_unlock(&dlp_info.list_mutex);
 
 	return 0;
 };
