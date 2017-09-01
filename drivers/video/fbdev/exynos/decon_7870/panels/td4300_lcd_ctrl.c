@@ -14,11 +14,12 @@
 #include <linux/of_device.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
-#include <linux/wakeup_reason.h>
 #include <video/mipi_display.h>
 #include "../dsim.h"
 #include "../decon.h"
+#include "../decon_board.h"
 #include "dsim_panel.h"
+#include "../decon_notify.h"
 
 #include "td4300_param.h"
 
@@ -77,23 +78,22 @@ struct lcd_info {
 	struct kobj_attribute		dsi_access_w;
 
 	struct notifier_block		fb_notif_panel;
-	s64						sleep_out_start_time;
+	struct i2c_client		*backlight_client;
 };
 
-struct i2c_client *backlight_client;
 
-static int ISL98611_array_write(const struct ISL98611_rom_data *eprom_ptr, int eprom_size)
+static int ISL98611_array_write(struct lcd_info *lcd, const struct ISL98611_rom_data *eprom_ptr, int eprom_size)
 {
 	int i = 0;
 	int ret = 0;
 
-	if (!backlight_client)
+	if (!lcd->backlight_client)
 		return 0;
 
 	for (i = 0; i < eprom_size; i++) {
-		ret = i2c_smbus_write_byte_data(backlight_client, eprom_ptr[i].addr, eprom_ptr[i].val);
+		ret = i2c_smbus_write_byte_data(lcd->backlight_client, eprom_ptr[i].addr, eprom_ptr[i].val);
 		if (ret < 0)
-			dsim_err("%s: error : BL DEVICE_CTRL setting fail\n", __func__);
+			dev_err(&lcd->ld->dev, "%s: fail. %d, %2x, %2x\n", __func__, ret, eprom_ptr[i].addr, eprom_ptr[i].val);
 	}
 
 	return ret;
@@ -102,17 +102,29 @@ static int ISL98611_array_write(const struct ISL98611_rom_data *eprom_ptr, int e
 static int isl98611_probe(struct i2c_client *client,
 	const struct i2c_device_id *id)
 {
+	struct lcd_info *lcd = NULL;
 	int ret = 0;
 
-	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
-		dsim_err("need I2C_FUNC_I2C.\n");
-		ret = -ENODEV;
-		goto err_i2c;
+	if (id && id->driver_data)
+		lcd = (struct lcd_info *)id->driver_data;
+
+	if (!lcd) {
+		dsim_err("%s: failed to find driver_data for lcd\n", __func__);
+		ret = -EINVAL;
+		goto exit;
 	}
 
-	backlight_client = client;
+	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
+		dev_err(&lcd->ld->dev, "%s: need I2C_FUNC_I2C\n", __func__);
+		ret = -ENODEV;
+		goto exit;
+	}
 
-err_i2c:
+	i2c_set_clientdata(client, lcd);
+
+	lcd->backlight_client = client;
+
+exit:
 	return ret;
 }
 
@@ -124,7 +136,7 @@ static struct i2c_device_id isl98611_id[] = {
 MODULE_DEVICE_TABLE(i2c, isl98611_id);
 
 static struct of_device_id isl98611_i2c_dt_ids[] = {
-	{ .compatible = "isl98611,i2c" },
+	{ .compatible = "i2c,isl98611" },
 	{ }
 };
 
@@ -146,7 +158,7 @@ static int dsim_write_hl_data(struct lcd_info *lcd, const u8 *cmd, u32 cmdSize)
 	int retry;
 	struct panel_private *priv = &lcd->dsim->priv;
 
-	if (priv->lcdConnected == PANEL_DISCONNEDTED)
+	if (!priv->lcdConnected)
 		return cmdSize;
 
 	retry = 5;
@@ -175,7 +187,7 @@ static int dsim_write_hl_data_generic(struct lcd_info *lcd, const u8 *cmd, u32 c
 	int retry;
 	struct panel_private *priv = &lcd->dsim->priv;
 
-	if (priv->lcdConnected == PANEL_DISCONNEDTED)
+	if (!priv->lcdConnected)
 		return cmdSize;
 
 	retry = 5;
@@ -201,15 +213,21 @@ try_write:
 static int dsim_read_hl_data(struct lcd_info *lcd, u8 addr, u32 size, u8 *buf)
 {
 	int ret;
-	int retry = 4;
+	int retry = 2;
 	struct panel_private *priv = &lcd->dsim->priv;
 
-	if (priv->lcdConnected == PANEL_DISCONNEDTED)
+	if (!priv->lcdConnected)
 		return size;
 
 	DSI_WRITE_G(SEQ_TD4300_B0, ARRAY_SIZE(SEQ_TD4300_B0));
 try_read:
-	ret = dsim_read_data(lcd->dsim, MIPI_DSI_GENERIC_READ_REQUEST_1_PARAM, (u32)addr, size, buf);
+
+	/* Panel ID register should be read by DCS_READ */
+	if (addr == 0xDA || addr == 0xDB || addr == 0xDC)
+		ret = dsim_read_data(lcd->dsim, MIPI_DSI_DCS_READ, (u32)addr, size, buf);
+	else
+		ret = dsim_read_data(lcd->dsim, MIPI_DSI_GENERIC_READ_REQUEST_1_PARAM, (u32)addr, size, buf);
+
 	dev_info(&lcd->ld->dev, "%s: addr: %x, ret: %d\n", __func__, addr, ret);
 	if (ret != size) {
 		if (--retry)
@@ -296,7 +314,7 @@ static int td4300_read_init_info(struct lcd_info *lcd)
 	dev_info(&lcd->ld->dev, "MDD : %s was called\n", __func__);
 
 	if (lcdtype == 0) {
-		priv->lcdConnected = PANEL_DISCONNEDTED;
+		priv->lcdConnected = 0;
 		goto read_exit;
 	}
 
@@ -313,6 +331,30 @@ read_exit:
 	return 0;
 }
 
+static int td4300_read_id(struct lcd_info *lcd)
+{
+	int ret = 0;
+	u8 buf[3] = {0, };
+	struct panel_private *priv = &lcd->dsim->priv;
+
+	priv->lcdConnected = 1;
+
+	ret = dsim_read_hl_data(lcd, TD4300_ID_REG, 1, (u8 *)&buf[0]);
+	ret = dsim_read_hl_data(lcd, TD4300_ID_REG + 1, 1, (u8 *)&buf[1]);
+	ret = dsim_read_hl_data(lcd, TD4300_ID_REG + 2, 1, (u8 *)&buf[2]);
+
+	if (ret <= 0)
+		priv->lcdConnected = 0;
+
+	lcd->id[0] = buf[0];
+	lcd->id[1] = buf[1];
+	lcd->id[2] = buf[2];
+
+	dev_info(&lcd->ld->dev, "%s: %d, 0x%02x 0x%02x 0x%02x\n", __func__, ret, lcd->id[0], lcd->id[1], lcd->id[2]);
+
+	return ret;
+}
+
 static int td4300_displayon(struct lcd_info *lcd)
 {
 	int ret = 0;
@@ -325,20 +367,10 @@ static int td4300_displayon(struct lcd_info *lcd)
 static int td4300_displayon_late(struct lcd_info *lcd)
 {
 	int ret = 0;
-	s64 temp = 0;
-	s64 sleep_out_time = 85;
 
 	dev_info(&lcd->ld->dev, "%s\n", __func__);
 
-	temp = ktime_to_ms(ktime_get()) - lcd->sleep_out_start_time;
-
-	dev_info(&lcd->ld->dev, "%s: %lld from sleep out\n", __func__, temp);
-
-	if (temp < sleep_out_time) {
-		dev_info(&lcd->ld->dev, "%s: %lld needed more delay\n", __func__, sleep_out_time - temp);
-		msleep(sleep_out_time - temp);
-	} else
-		dev_info(&lcd->ld->dev, "%s: %lld sleep out done\n", __func__, sleep_out_time - temp);
+	run_list(lcd->dsim->dev, __func__);
 
 	msleep(30);
 
@@ -352,7 +384,6 @@ static int td4300_displayon_late(struct lcd_info *lcd)
 
 exit:
 	return ret;
-
 }
 
 static int td4300_exit(struct lcd_info *lcd)
@@ -373,7 +404,16 @@ static int td4300_init(struct lcd_info *lcd)
 {
 	int ret = 0;
 
-	dev_info(&lcd->ld->dev, "%s\n", __func__);
+	dev_info(&lcd->ld->dev, "%s: ++\n", __func__);
+
+	// Read REQ packet is sent by LPDT
+	dsim_reg_set_standby(0, 0);
+	dsim_reg_set_cmd_transfer_mode(0, 1);
+	dsim_reg_set_standby(0, 1);
+	td4300_read_id(lcd);
+	dsim_reg_set_standby(0, 0);
+	dsim_reg_set_cmd_transfer_mode(0, 0);
+	dsim_reg_set_standby(0, 1);
 
 	DSI_WRITE_G(SEQ_TD4300_B0, ARRAY_SIZE(SEQ_TD4300_B0));
 	DSI_WRITE_G(SEQ_TD4300_B3, ARRAY_SIZE(SEQ_TD4300_B3));
@@ -413,8 +453,9 @@ static int td4300_init(struct lcd_info *lcd)
 	DSI_WRITE(SEQ_TD4300_ADDRESS, ARRAY_SIZE(SEQ_TD4300_ADDRESS));
 	DSI_WRITE(SEQ_SLEEP_OUT, ARRAY_SIZE(SEQ_SLEEP_OUT));
 
-	lcd->sleep_out_start_time = ktime_to_ms(ktime_get());
-	dev_info(&lcd->ld->dev, "%s: %lld\n", __func__, lcd->sleep_out_start_time);
+	run_list(lcd->dsim->dev, __func__);
+
+	dev_info(&lcd->ld->dev, "%s: --\n", __func__);
 
 exit:
 	return ret;
@@ -473,12 +514,10 @@ static int td4300_probe(struct dsim_device *dsim)
 	int ret = 0;
 	struct panel_private *priv = &dsim->priv;
 	struct lcd_info *lcd = dsim->priv.par;
-	struct device_node *np;
-	struct platform_device *pdev;
 
 	dev_info(&lcd->ld->dev, "%s: was called\n", __func__);
 
-	priv->lcdConnected = PANEL_CONNECTED;
+	priv->lcdConnected = 1;
 
 	lcd->bd->props.max_brightness = EXTEND_BRIGHTNESS;
 	lcd->bd->props.brightness = UI_DEFAULT_BRIGHTNESS;
@@ -488,23 +527,20 @@ static int td4300_probe(struct dsim_device *dsim)
 	lcd->lux = -1;
 
 	td4300_read_init_info(lcd);
-	if (priv->lcdConnected == PANEL_DISCONNEDTED) {
+	if (!priv->lcdConnected) {
 		dev_err(&lcd->ld->dev, "dsim : %s lcd was not connected\n", __func__);
 		goto exit;
 	}
 
-	np = of_find_node_with_property(NULL, "lcd_info");
-	np = of_parse_phandle(np, "lcd_info", 0);
-	pdev = of_platform_device_create(np, NULL, dsim->dev);
-
 	memset(&lcd->fb_notif_panel, 0, sizeof(lcd->fb_notif_panel));
 	lcd->fb_notif_panel.notifier_call = fb_notifier_callback;
-	fb_register_client(&lcd->fb_notif_panel);
+	decon_register_notifier(&lcd->fb_notif_panel);
 
 #if defined(CONFIG_SEC_INCELL)
 	incell_data.blank_unblank = incell_blank_unblank;
 #endif
 
+	isl98611_id->driver_data = (kernel_ulong_t)lcd;
 	i2c_add_driver(&isl98611_i2c_driver);
 
 	dev_info(&lcd->ld->dev, "%s: done\n", __func__);
@@ -572,7 +608,7 @@ static ssize_t dump_register_show(struct device *dev,
 	struct lcd_info *lcd = dev_get_drvdata(dev);
 	char *pos = buf;
 	u8 reg, len, table;
-	int ret, i;
+	int i;
 	u8 *dump = NULL;
 
 	reg = lcd->dump_info[0];
@@ -585,7 +621,7 @@ static ssize_t dump_register_show(struct device *dev,
 	dump = kcalloc(len, sizeof(u8), GFP_KERNEL);
 
 	if (lcd->state == PANEL_STATE_RESUMED) {
-		ret = dsim_read_hl_data(lcd, reg, len, dump);
+		dsim_read_hl_data(lcd, reg, len, dump);
 	}
 
 	pos += sprintf(pos, "+ [%02X]\n", reg);
@@ -610,7 +646,7 @@ static ssize_t dump_register_store(struct device *dev,
 	unsigned int reg, len, offset;
 	int ret;
 
-	ret = sscanf(buf, "%x %d %d", &reg, &len, &offset);
+	ret = sscanf(buf, "%8x %8d %8d", &reg, &len, &offset);
 
 	if (ret == 2)
 		offset = 0;
@@ -654,7 +690,7 @@ static ssize_t read_show(struct kobject *kobj,
 	struct lcd_info *lcd = container_of(attr, struct lcd_info, dsi_access_r);
 	char *pos = buf;
 	u8 reg, len, param;
-	int ret, i;
+	int i;
 	u8 *dump = NULL;
 	unsigned int data_type;
 
@@ -669,7 +705,7 @@ static ssize_t read_show(struct kobject *kobj,
 	dump = kcalloc(len, sizeof(u8), GFP_KERNEL);
 
 	if (lcd->state == PANEL_STATE_RESUMED) {
-		ret = dsim_read_data(lcd->dsim, data_type, reg, len, dump);
+		dsim_read_data(lcd->dsim, data_type, reg, len, dump);
 	}
 
 	for (i = 0; i < len; i++)
@@ -694,7 +730,7 @@ static ssize_t read_store(struct kobject *kobj,
 	unsigned int data_type, return_packet_type;
 	int ret;
 
-	ret = sscanf(buf, "%x %x %x %x %x", &data_type, &reg, &param, &return_packet_type, &len);
+	ret = sscanf(buf, "%8x %8x %8x %8x %8x", &data_type, &reg, &param, &return_packet_type, &len);
 
 	if (ret != 5)
 		return -EINVAL;
@@ -844,32 +880,6 @@ static int mdnie_lite_read(struct lcd_info *lcd, u8 addr, u8 *buf, u32 size)
 }
 #endif
 
-#ifdef CONFIG_EXYNOS_MIPI_DSI_ENABLE_EARLY
-void dsim_resume_event(int event)
-{
-	struct decon_device *decon = decon_int_drvdata;
-	struct dsim_device *dsim = NULL;
-	dsim = container_of(decon->output_sd, struct dsim_device, sd);
-
-	dsim->resume_request = event;
-}
-
-static int dsim_resume_reason(struct dsim_device *dsim)
-{
-	int ret = 0;
-
-	/* this is temporary solution. 556 is finger print irq number from etspi-drdyPin */
-	ret = dsim->resume_request | check_wakeup_reason(556);
-
-	if (ret)
-		dsim_info("%s: %d, %d\n", __func__, dsim->resume_request, check_wakeup_reason(556));
-
-	dsim->resume_request = 0;
-
-	return ret;
-}
-#endif
-
 static int dsim_panel_probe(struct dsim_device *dsim)
 {
 	int ret = 0;
@@ -928,9 +938,18 @@ static int dsim_panel_prepare(struct dsim_device *dsim)
 
 	/* VSP VSN setting, So, It should be called before power enabling */
 
-	ret = ISL98611_array_write(ISL98611_INIT, ARRAY_SIZE(ISL98611_INIT));
+#if defined(CONFIG_SEC_FACTORY)
+	ret = ISL98611_array_write(lcd, ISL98611_RESET, ARRAY_SIZE(ISL98611_RESET));
+	if (ret < 0)
+		dev_err(&lcd->ld->dev, "%s: error : BL DEVICE_CTRL reset fail\n", __func__);
+	msleep(100);
+	dev_info(&lcd->ld->dev, "%s: BLIC_RESET\n", __func__);
+#else
+	ret = ISL98611_array_write(lcd, ISL98611_INIT, ARRAY_SIZE(ISL98611_INIT));
 	if (ret < 0)
 		dev_err(&lcd->ld->dev, "%s: error : BL DEVICE_CTRL setting fail\n", __func__);
+	dev_info(&lcd->ld->dev, "%s: BLIC_Configuration\n", __func__);
+#endif
 
 	dev_info(&lcd->ld->dev, "-%s: %d\n", __func__, priv->lcdConnected);
 
@@ -1022,8 +1041,5 @@ struct mipi_dsim_lcd_driver td4300_mipi_lcd_driver = {
 	.displayon	= dsim_panel_displayon,
 	.displayon_late = dsim_panel_displayon_late,
 	.suspend	= dsim_panel_suspend,
-#ifdef CONFIG_EXYNOS_MIPI_DSI_ENABLE_EARLY
-	.resume_reason	= dsim_resume_reason
-#endif
 };
 

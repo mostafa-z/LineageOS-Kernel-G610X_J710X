@@ -68,7 +68,7 @@ static int dsim_write_hl_data(struct lcd_info *lcd, const u8 *cmd, u32 cmdSize)
 	int retry;
 	struct panel_private *priv = &lcd->dsim->priv;
 
-	if (priv->lcdConnected == PANEL_DISCONNEDTED)
+	if (!priv->lcdConnected)
 		return cmdSize;
 
 	retry = 5;
@@ -97,7 +97,7 @@ static int dsim_read_hl_data(struct lcd_info *lcd, u8 addr, u32 size, u8 *buf)
 	int retry = 4;
 	struct panel_private *priv = &lcd->dsim->priv;
 
-	if (priv->lcdConnected == PANEL_DISCONNEDTED)
+	if (!priv->lcdConnected)
 		return size;
 
 try_read:
@@ -707,7 +707,7 @@ static int ea8064g_read_init_info(struct lcd_info *lcd, unsigned char *mtp)
 	ret = dsim_read_hl_data(lcd, EA8064G_ID_REG, EA8064G_ID_LEN, lcd->id);
 	if (ret != EA8064G_ID_LEN) {
 		dev_err(&lcd->ld->dev, "%s: can't find connected panel. check panel connection\n", __func__);
-		priv->lcdConnected = PANEL_DISCONNEDTED;
+		priv->lcdConnected = 0;
 		goto read_exit;
 	}
 
@@ -773,7 +773,7 @@ static int ea8064g_probe(struct dsim_device *dsim)
 
 	dev_info(&lcd->ld->dev, "MDD : %s was called\n", __func__);
 
-	priv->lcdConnected = PANEL_CONNECTED;
+	priv->lcdConnected = 1;
 	lcd->bd->props.max_brightness = EXTEND_BRIGHTNESS;
 	lcd->bd->props.brightness = UI_DEFAULT_BRIGHTNESS;
 	lcd->dsim = dsim;
@@ -786,7 +786,7 @@ static int ea8064g_probe(struct dsim_device *dsim)
 	lcd->lux = -1;
 
 	ret = ea8064g_read_init_info(lcd, mtp);
-	if (priv->lcdConnected == PANEL_DISCONNEDTED) {
+	if (!priv->lcdConnected) {
 		dev_err(&lcd->ld->dev, "dsim : %s lcd was not connected\n", __func__);
 		goto probe_exit;
 	}

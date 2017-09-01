@@ -425,6 +425,12 @@ int mip4_tk_flash_fw(struct mip4_tk_info *info, const u8 *fw_data, size_t fw_siz
 		} else {
 			input_info(true, &client->dev, "%s - Chip firmware version [0x%04X 0x%04X 0x%04X 0x%04X]\n", __func__, ver_chip[0], ver_chip[1], ver_chip[2], ver_chip[3]);
 
+			if (ver_chip[3] == 0x179) {
+				input_info(true, &client->dev, "%s - Chip firmware is specific test version\n", __func__);
+				ret = fw_err_uptodate;
+				goto UPTODATE;
+			}
+
 			//Compare version
 			if (section == false) {
 				//Full download

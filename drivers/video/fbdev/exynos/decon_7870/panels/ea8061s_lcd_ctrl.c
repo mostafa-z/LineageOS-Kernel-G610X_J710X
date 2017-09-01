@@ -72,7 +72,7 @@ static int dsim_write_hl_data(struct lcd_info *lcd, const u8 *cmd, u32 cmdSize)
 	int retry;
 	struct panel_private *priv = &lcd->dsim->priv;
 
-	if (priv->lcdConnected == PANEL_DISCONNEDTED)
+	if (!priv->lcdConnected)
 		return cmdSize;
 
 	retry = 5;
@@ -101,7 +101,7 @@ static int dsim_read_hl_data(struct lcd_info *lcd, u8 addr, u32 size, u8 *buf)
 	int retry = 4;
 	struct panel_private *priv = &lcd->dsim->priv;
 
-	if (priv->lcdConnected == PANEL_DISCONNEDTED)
+	if (!priv->lcdConnected)
 		return size;
 
 try_read:
@@ -132,6 +132,30 @@ static int dsim_read_hl_data_offset(struct lcd_info *lcd, u8 addr, u32 size, u8 
 	if (ret < 1)
 		dev_err(&lcd->ld->dev, "%s: fail\n", __func__);
 
+	return ret;
+}
+
+static int ea8061s_read_id(struct lcd_info *lcd)
+{
+	struct panel_private *priv = &lcd->dsim->priv;
+	int ret = 0;
+	int i = 0;
+
+	priv->lcdConnected = 1;
+
+	ret = dsim_read_hl_data(lcd, ID_REG, ID_LEN, lcd->id);
+	if (ret < 0) {
+		priv->lcdConnected = 0;
+		dev_err(&lcd->ld->dev, "%s: fail\n", __func__);
+		goto exit;
+	}
+
+	dev_info(&lcd->ld->dev, "READ ID : ");
+	for (i = 0; i < ID_LEN; i++)
+		dev_info(&lcd->ld->dev, "%02x, ", lcd->id[i]);
+	dev_info(&lcd->ld->dev, "\n");
+
+exit:
 	return ret;
 }
 
@@ -239,9 +263,7 @@ static void dsim_panel_set_elvss(struct lcd_info *lcd)
 {
 	u8 *elvss = NULL;
 	u8 elvss_val[ELVSS_READ_SIZE + 1] = { 0xB6, };
-	int real_br = 0;
 
-	real_br = get_actual_br_value(lcd, lcd->br_index);
 	elvss = get_elvss_from_index(lcd, lcd->br_index, lcd->acl_enable);
 
 	if (elvss == NULL) {
@@ -274,9 +296,6 @@ static void dsim_panel_set_elvss(struct lcd_info *lcd)
 static int dsim_panel_set_acl(struct lcd_info *lcd, int force)
 {
 	int ret = 0, level = ACL_STATUS_15P;
-	int brightness = 0;
-
-	brightness = lcd->bd->props.brightness;
 
 	if (lcd->siop_enable || LEVEL_IS_HBM(lcd->brightness))
 		goto acl_update;
@@ -707,7 +726,7 @@ static int ea8061s_read_init_info(struct lcd_info *lcd, unsigned char *mtp)
 	ret = dsim_read_hl_data(lcd, ID_REG, ID_LEN, lcd->id);
 	if (ret != ID_LEN) {
 		dev_err(&lcd->ld->dev, "%s: can't find connected panel. check panel connection\n", __func__);
-		priv->lcdConnected = PANEL_DISCONNEDTED;
+		priv->lcdConnected = 0;
 		goto read_exit;
 	}
 
@@ -831,6 +850,8 @@ static int ea8061s_init(struct lcd_info *lcd)
 		goto init_exit;
 	}
 
+	ea8061s_read_id(lcd);
+
 	/* common setting */
 	ret = dsim_write_hl_data(lcd, SEQ_HSYNC_GEN_ON, ARRAY_SIZE(SEQ_HSYNC_GEN_ON));
 	if (ret < 0) {
@@ -937,7 +958,7 @@ static int ea8061s_probe(struct dsim_device *dsim)
 
 	dev_info(&lcd->ld->dev, "MDD : %s was called\n", __func__);
 
-	priv->lcdConnected = PANEL_CONNECTED;
+	priv->lcdConnected = 1;
 	lcd->bd->props.max_brightness = EXTEND_BRIGHTNESS;
 	lcd->bd->props.brightness = UI_DEFAULT_BRIGHTNESS;
 	lcd->dsim = dsim;
@@ -951,7 +972,7 @@ static int ea8061s_probe(struct dsim_device *dsim)
 	lcd->lux = -1;
 
 	ea8061s_read_init_info(lcd, mtp);
-	if (priv->lcdConnected == PANEL_DISCONNEDTED) {
+	if (!priv->lcdConnected) {
 		dev_err(&lcd->ld->dev, "dsim : %s lcd was not connected\n", __func__);
 		goto probe_exit;
 	}
@@ -1223,7 +1244,7 @@ static ssize_t dump_register_show(struct device *dev,
 	struct lcd_info *lcd = dev_get_drvdata(dev);
 	char *pos = buf;
 	u8 reg, len, offset;
-	int ret, i;
+	int i;
 	u8 *dump = NULL;
 
 	reg = lcd->dump_info[0];
@@ -1242,9 +1263,9 @@ static ssize_t dump_register_show(struct device *dev,
 			dev_err(&lcd->ld->dev, "failed to write test on fc command.\n");
 
 		if (offset)
-			ret = dsim_read_hl_data_offset(lcd, reg, len, dump, offset);
+			dsim_read_hl_data_offset(lcd, reg, len, dump, offset);
 		else
-			ret = dsim_read_hl_data(lcd, reg, len, dump);
+			dsim_read_hl_data(lcd, reg, len, dump);
 
 		if (dsim_write_hl_data(lcd, SEQ_TEST_KEY_OFF_FC, ARRAY_SIZE(SEQ_TEST_KEY_OFF_FC)) < 0)
 			dev_err(&lcd->ld->dev, "failed to write test off fc command.\n");
@@ -1274,7 +1295,7 @@ static ssize_t dump_register_store(struct device *dev,
 	unsigned int reg, len, offset;
 	int ret;
 
-	ret = sscanf(buf, "%x %d %d", &reg, &len, &offset);
+	ret = sscanf(buf, "%8x %8d %8d", &reg, &len, &offset);
 
 	if (ret == 2)
 		offset = 0;
@@ -1318,7 +1339,9 @@ static ssize_t adaptive_control_store(struct device *dev,
 
 	if (lcd->adaptive_control != value) {
 		dev_info(dev, "%s: %d, %d\n", __func__, lcd->adaptive_control, value);
+		mutex_lock(&lcd->lock);
 		lcd->adaptive_control = value;
+		mutex_unlock(&lcd->lock);
 		dsim_panel_set_brightness(lcd, 1);
 	}
 

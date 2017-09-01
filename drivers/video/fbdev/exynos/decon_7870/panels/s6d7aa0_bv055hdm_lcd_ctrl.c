@@ -24,8 +24,6 @@
 #include "s6d7aa0_bv055hdm_param.h"
 
 
-struct i2c_client *tc358764_client;
-
 #define S6D7AA0_ID_REG			0xD8	/* LCD ID1,ID2,ID3 */
 #define S6D7AA0_ID_LEN			3
 #define BRIGHTNESS_REG			0x51
@@ -65,19 +63,15 @@ struct lcd_info {
 	struct dsim_device		*dsim;
 	struct mutex			lock;
 
-	struct pinctrl			*pins;
-	struct pinctrl_state		*pins_state[2];
-	struct pinctrl			*pins_pwm;
-	struct pinctrl_state		*pins_state_pwm[2];
-
 	struct pwm_device		*pwm;
 	unsigned int			pwm_period;
 	unsigned int			pwm_min;
 	unsigned int			pwm_max;
+
+	struct i2c_client		*backlight_client;
+	int				backlight_reset[3];
 };
 
-struct i2c_client *backlight_client;
-int	backlight_reset[3];
 
 
 static int dsim_write_hl_data(struct lcd_info *lcd, const u8 *cmd, u32 cmdSize)
@@ -86,7 +80,7 @@ static int dsim_write_hl_data(struct lcd_info *lcd, const u8 *cmd, u32 cmdSize)
 	int retry;
 	struct panel_private *priv = &lcd->dsim->priv;
 
-	if (priv->lcdConnected == PANEL_DISCONNEDTED)
+	if (!priv->lcdConnected)
 		return cmdSize;
 
 	retry = 5;
@@ -115,7 +109,7 @@ static int dsim_read_hl_data(struct lcd_info *lcd, u8 addr, u32 size, u8 *buf)
 	int retry = 4;
 	struct panel_private *priv = &lcd->dsim->priv;
 
-	if (priv->lcdConnected == PANEL_DISCONNEDTED)
+	if (!priv->lcdConnected)
 		return size;
 
 try_read:
@@ -149,18 +143,18 @@ exit:
 	return ret;
 }
 
-static int lm3632_array_write(const struct LM3632_rom_data *eprom_ptr, int eprom_size)
+static int lm3632_array_write(struct lcd_info *lcd, const struct LM3632_rom_data *eprom_ptr, int eprom_size)
 {
 	int i = 0;
 	int ret = 0;
 
-	if (!backlight_client)
+	if (!lcd->backlight_client)
 		return 0;
 
 	for (i = 0; i < eprom_size; i++) {
-		ret = i2c_smbus_write_byte_data(backlight_client, eprom_ptr[i].addr, eprom_ptr[i].val);
+		ret = i2c_smbus_write_byte_data(lcd->backlight_client, eprom_ptr[i].addr, eprom_ptr[i].val);
 		if (ret < 0)
-			dsim_err("%s: error : BL DEVICE_CTRL setting fail\n", __func__);
+			dev_err(&lcd->ld->dev, "%s: fail. %d, %2x, %2x\n", __func__, ret, eprom_ptr[i].addr, eprom_ptr[i].val);
 	}
 
 	return 0;
@@ -185,7 +179,7 @@ static int dsim_panel_set_brightness(struct lcd_info *lcd, int force)
 	bl_reg[0] = BRIGHTNESS_REG;
 
 	if (LEVEL_IS_HBM(lcd->brightness)) { //HBM
-		lm3632_array_write(backlight_ic_tuning_outdoor, ARRAY_SIZE(backlight_ic_tuning_outdoor));
+		lm3632_array_write(lcd, backlight_ic_tuning_outdoor, ARRAY_SIZE(backlight_ic_tuning_outdoor));
 		lcd->current_hbm = 1;
 		dsim_write_hl_data(lcd, SEQ_PASSWD1, sizeof(SEQ_PASSWD1));
 		dsim_write_hl_data(lcd, OUTDOOR_MDNIE_1, sizeof(OUTDOOR_MDNIE_1));
@@ -208,7 +202,7 @@ static int dsim_panel_set_brightness(struct lcd_info *lcd, int force)
 			dsim_write_hl_data(lcd, UI_MDNIE_5, sizeof(UI_MDNIE_5));
 			dsim_write_hl_data(lcd, UI_MDNIE_6, sizeof(UI_MDNIE_6));
 			dsim_write_hl_data(lcd, SEQ_PASSWD1_LOCK, sizeof(SEQ_PASSWD1_LOCK));
-			lm3632_array_write(backlight_ic_tuning_normal, ARRAY_SIZE(backlight_ic_tuning_normal));
+			lm3632_array_write(lcd, backlight_ic_tuning_normal, ARRAY_SIZE(backlight_ic_tuning_normal));
 			lcd->current_hbm = 0;
 			dev_info(&lcd->ld->dev, "%s: Back light IC outdoor mode : %d\n", __func__, lcd->current_hbm);
 		}
@@ -285,7 +279,7 @@ static int s6d7aa0_read_init_info(struct lcd_info *lcd)
 	dev_info(&lcd->ld->dev, "MDD : %s was called\n", __func__);
 
 	if (lcdtype == 0) {
-		priv->lcdConnected = PANEL_DISCONNEDTED;
+		priv->lcdConnected = 0;
 		goto read_exit;
 	}
 
@@ -387,10 +381,10 @@ static int s6d7aa0_exit(struct lcd_info *lcd)
 
 	msleep(120);
 
-//	lm3632_array_write(LM3632_eprom_drv_arr_off, ARRAY_SIZE(LM3632_eprom_drv_arr_off));
-	if (backlight_reset[0]) {
+//	lm3632_array_write(lcd, LM3632_eprom_drv_arr_off, ARRAY_SIZE(LM3632_eprom_drv_arr_off));
+	if (lcd->backlight_reset[0]) {
 
-		lm3632_array_write(backlight_ic_tuning, ARRAY_SIZE(backlight_ic_tuning));
+		lm3632_array_write(lcd, backlight_ic_tuning, ARRAY_SIZE(backlight_ic_tuning));
 
 
 	}
@@ -577,21 +571,33 @@ init_exit:
 static int lm3632_probe(struct i2c_client *client,
 	const struct i2c_device_id *id)
 {
+	struct lcd_info *lcd = NULL;
 	int ret = 0;
 
-	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
-		pr_err("led : need I2C_FUNC_I2C.\n");
-		ret = -ENODEV;
-		goto err_i2c;
+	if (id && id->driver_data)
+		lcd = (struct lcd_info *)id->driver_data;
+
+	if (!lcd) {
+		dsim_err("%s: failed to find driver_data for lcd\n", __func__);
+		ret = -EINVAL;
+		goto exit;
 	}
 
-	backlight_client = client;
+	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
+		dev_err(&lcd->ld->dev, "%s: need I2C_FUNC_I2C\n", __func__);
+		ret = -ENODEV;
+		goto exit;
+	}
 
-	backlight_reset[0] = of_get_gpio(client->dev.of_node, 0);
-	backlight_reset[1] = of_get_gpio(client->dev.of_node, 1);
-	backlight_reset[2] = of_get_gpio(client->dev.of_node, 2);
+	i2c_set_clientdata(client, lcd);
 
-err_i2c:
+	lcd->backlight_client = client;
+
+	lcd->backlight_reset[0] = of_get_gpio(client->dev.of_node, 0);
+	lcd->backlight_reset[1] = of_get_gpio(client->dev.of_node, 1);
+	lcd->backlight_reset[2] = of_get_gpio(client->dev.of_node, 2);
+
+exit:
 	return ret;
 }
 
@@ -603,7 +609,7 @@ static struct i2c_device_id lm3632_id[] = {
 MODULE_DEVICE_TABLE(i2c, lm3632_id);
 
 static struct of_device_id lm3632_i2c_dt_ids[] = {
-	{ .compatible = "lm3632,i2c" },
+	{ .compatible = "i2c,lm3632" },
 	{ }
 };
 
@@ -624,14 +630,13 @@ static int s6d7aa0_probe(struct dsim_device *dsim)
 	int ret = 0;
 	struct panel_private *priv = &dsim->priv;
 	struct lcd_info *lcd = dsim->priv.par;
-	struct device_node *np;
-	struct platform_device *pdev;
 
 	dev_info(&lcd->ld->dev, "%s: was called\n", __func__);
 
+	lm3632_id->driver_data = (kernel_ulong_t)lcd;
 	i2c_add_driver(&lm3632_i2c_driver);
 
-	priv->lcdConnected = PANEL_CONNECTED;
+	priv->lcdConnected = 1;
 
 	lcd->bd->props.max_brightness = EXTEND_BRIGHTNESS;
 	lcd->bd->props.brightness = UI_DEFAULT_BRIGHTNESS;
@@ -646,14 +651,10 @@ static int s6d7aa0_probe(struct dsim_device *dsim)
 	lcd->current_hbm = FIRST_BOOT;
 
 	s6d7aa0_read_init_info(lcd);
-	if (priv->lcdConnected == PANEL_DISCONNEDTED) {
+	if (!priv->lcdConnected) {
 		dev_err(&lcd->ld->dev, "dsim : %s lcd was not connected\n", __func__);
 		goto exit;
 	}
-
-	np = of_find_node_with_property(NULL, "lcd_info");
-	np = of_parse_phandle(np, "lcd_info", 0);
-	pdev = of_platform_device_create(np, NULL, dsim->dev);
 
 	dev_info(&lcd->ld->dev, "%s: done\n", __func__);
 exit:
@@ -748,25 +749,6 @@ static ssize_t power_reduce_store(struct device *dev,
 	return size;
 }
 
-static ssize_t temperature_show(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	char temp[] = "-20, -19, 0, 1\n";
-
-	strcat(buf, temp);
-	return strlen(buf);
-}
-
-static ssize_t temperature_store(struct device *dev,
-	struct device_attribute *attr, const char *buf, size_t size)
-{
-	int value, rc = 0;
-
-	rc = kstrtoint(buf, 10, &value);
-
-	return size;
-}
-
 static ssize_t dump_register_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
@@ -820,7 +802,7 @@ static ssize_t dump_register_store(struct device *dev,
 	unsigned int reg, len, offset;
 	int ret;
 
-	ret = sscanf(buf, "%x %d %d", &reg, &len, &offset);
+	ret = sscanf(buf, "%8x %8d %8d", &reg, &len, &offset);
 
 	if (ret == 2)
 		offset = 0;
@@ -846,13 +828,11 @@ static DEVICE_ATTR(lcd_type, 0444, lcd_type_show, NULL);
 static DEVICE_ATTR(window_type, 0444, window_type_show, NULL);
 static DEVICE_ATTR(siop_enable, 0664, siop_enable_show, siop_enable_store);
 static DEVICE_ATTR(power_reduce, 0664, power_reduce_show, power_reduce_store);
-static DEVICE_ATTR(temperature, 0664, temperature_show, temperature_store);
 static DEVICE_ATTR(dump_register, 0644, dump_register_show, dump_register_store);
 
 static struct attribute *lcd_sysfs_attributes[] = {
 	&dev_attr_siop_enable.attr,
 	&dev_attr_power_reduce.attr,
-	&dev_attr_temperature.attr,
 	&dev_attr_lcd_type.attr,
 	&dev_attr_window_type.attr,
 	&dev_attr_dump_register.attr,
@@ -926,18 +906,18 @@ static int dsim_panel_resume(struct dsim_device *dsim)
 	if (lcd->state == PANEL_STATE_SUSPENED) {
 
 
-		ret = gpio_request_one(backlight_reset[0], GPIOF_OUT_INIT_HIGH, "BL_power");
-		gpio_free(backlight_reset[0]);
+		ret = gpio_request_one(lcd->backlight_reset[0], GPIOF_OUT_INIT_HIGH, "BL_power");
+		gpio_free(lcd->backlight_reset[0]);
 		usleep_range(10000, 11000);
 		// blic_setting > enp > enn
-		lm3632_array_write(backlight_ic_tuning, ARRAY_SIZE(backlight_ic_tuning));
+		lm3632_array_write(lcd, backlight_ic_tuning, ARRAY_SIZE(backlight_ic_tuning));
 
-		ret = gpio_request_one(backlight_reset[1], GPIOF_OUT_INIT_HIGH, "PANEL_ENP");
-		gpio_free(backlight_reset[1]);
+		ret = gpio_request_one(lcd->backlight_reset[1], GPIOF_OUT_INIT_HIGH, "PANEL_ENP");
+		gpio_free(lcd->backlight_reset[1]);
 		usleep_range(1100, 1200); //min 1ms
 
-		ret = gpio_request_one(backlight_reset[2], GPIOF_OUT_INIT_HIGH, "PANEL_ENN");
-		gpio_free(backlight_reset[2]);
+		ret = gpio_request_one(lcd->backlight_reset[2], GPIOF_OUT_INIT_HIGH, "PANEL_ENN");
+		gpio_free(lcd->backlight_reset[2]);
 
 		msleep(40);
 

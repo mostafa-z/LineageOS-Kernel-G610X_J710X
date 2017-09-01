@@ -1,5 +1,5 @@
-#ifndef __S6E3FA3_A7XE_PARAM_H__
-#define __S6E3FA3_A7XE_PARAM_H__
+#ifndef __LTL101AL06_PARAM_H__
+#define __LTL101AL06_PARAM_H__
 
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -17,4 +17,4 @@ enum {
 	TEMP_MAX
 };
 
-#endif /* __S6E3FA3_A7XE_PARAM_H__ */
+#endif /* __LTL101AL06_PARAM_H__ */

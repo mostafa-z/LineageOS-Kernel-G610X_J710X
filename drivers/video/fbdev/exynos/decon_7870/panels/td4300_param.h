@@ -32,6 +32,10 @@ struct ISL98611_rom_data {
 	u8 val;
 };
 
+static const struct ISL98611_rom_data ISL98611_RESET[] = {
+	{0x02, 0x3F},
+};
+
 #if defined(CONFIG_PANEL_BRIGHTNESS_MAX_480CD)
 static const struct ISL98611_rom_data ISL98611_INIT[] = {
 	{0x01, 0x00},

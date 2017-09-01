@@ -34,9 +34,6 @@
 
 #include <linux/sec_sysfs.h>
 #include <linux/sec_debug.h>
-#ifdef CONFIG_EXYNOS_MIPI_DSI_ENABLE_EARLY
-#include "../../video/fbdev/exynos/decon_7870/dsim.h"
-#endif
 
 struct device *sec_key;
 EXPORT_SYMBOL(sec_key);
@@ -56,6 +53,10 @@ bool wakeup_by_key(void) {
 }
 
 EXPORT_SYMBOL(wakeup_by_key);
+
+#if defined(CONFIG_FB) && defined(CONFIG_SENSORS_VFS7XXX)
+extern void vfsspi_fp_homekey_ev(void);
+#endif
 
 struct gpio_button_data {
 	struct gpio_keys_button *button;
@@ -479,6 +480,10 @@ static void gpio_keys_gpio_report_event(struct gpio_button_data *bdata)
 		bdata->key_state = !!state;
 		input_event(input, type, button->code,
 				irqd_is_wakeup_set(&desc->irq_data) ? 1 : !!state);
+#if defined(CONFIG_FB) && defined(CONFIG_SENSORS_VFS7XXX)
+		if(button->code == KEY_HOMEPAGE && !!state == 1)
+			vfsspi_fp_homekey_ev();
+#endif
 	}
 	input_sync(input);
 }
@@ -510,9 +515,6 @@ static irqreturn_t gpio_keys_gpio_isr(int irq, void *dev_id)
 	if (suspend_state) {
 		irq_in_suspend = true;
 		wakeup_reason = bdata->button->code;
-#ifdef CONFIG_EXYNOS_MIPI_DSI_ENABLE_EARLY
-		dsim_resume_event(true);
-#endif
 		pr_info("%s before resume by %d\n", __func__, wakeup_reason);
 	}
 

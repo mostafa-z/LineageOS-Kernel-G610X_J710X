@@ -46,6 +46,16 @@
 #include <linux/sec_batt.h>
 #endif
 
+#ifdef CONFIG_TOUCHKEY_GRIP
+#define FEATURE_GRIP_FOR_SAR
+#endif
+
+#if defined (CONFIG_VBUS_NOTIFIER) && defined(FEATURE_GRIP_FOR_SAR)
+#include <linux/muic/muic.h>
+#include <linux/muic/muic_notifier.h>
+#include <linux/vbus_notifier.h>
+#endif
+
 /* TSK IC */
 #define TC300K_TSK_IC	0x00
 #define TC350K_TSK_IC	0x01
@@ -79,6 +89,18 @@
 #define TC350K_3KEY		0x20	// recent outer
 #define TC350K_4KEY		0x28	// back outer
 
+#ifdef FEATURE_GRIP_FOR_SAR
+/* registers for grip sensor */
+#define TC305K_GRIP_THD_PRESS		0x30
+#define TC305K_GRIP_THD_RELEASE		0x32
+#define TC305K_GRIP_THD_NOISE		0x34
+#define TC305K_GRIP_CH_PERCENT		0x36
+#define TC305K_GRIP_DIFF_DATA		0x38
+#define TC305K_GRIP_RAW_DATA		0x3A
+#define TC305K_GRIP_BASELINE		0x3C
+#define TC305K_GRIP_TOTAL_CAP		0x3E
+#endif
+
 #define TC350K_THRES_DATA_OFFSET	0x00
 #define TC350K_CH_PER_DATA_OFFSET	0x02
 #define TC350K_CH_DIFF_DATA_OFFSET	0x04
@@ -94,12 +116,24 @@
 #define TC300K_CMD_LED_OFF		0x20
 #define TC300K_CMD_GLOVE_ON		0x30
 #define TC300K_CMD_GLOVE_OFF	0x40
-#define TC300K_CMD_FAC_ON		0x50
-#define TC300K_CMD_FAC_OFF		0x60
+#define TC300K_CMD_TA_ON		0x50
+#define TC300K_CMD_TA_OFF		0x60
 #define TC300K_CMD_CAL_CHECKSUM	0x70
+#define TC300K_CMD_STOP_MODE		0x90
+#define TC300K_CMD_NORMAL_MODE		0x91
+#define TC300K_CMD_SAR_DISABLE		0xA0
+#define TC300K_CMD_SAR_ENABLE		0xA1
 #define TC300K_CMD_FLIP_OFF		0xB0
 #define TC300K_CMD_FLIP_ON		0xB1
+#define TC300K_CMD_GRIP_BASELINE_CAL	0xC0
+#define TC300K_CMD_WAKE_UP		0xF0
 #define TC300K_CMD_DELAY		50
+
+/* mode status bit */
+#define TC300K_MODE_TA_CONNECTED	(1 << 0)
+#define TC300K_MODE_RUN			(1 << 1)
+#define TC300K_MODE_SAR			(1 << 2)
+#define TC300K_MODE_GLOVE		(1 << 4)
 
 /* connecter check */
 #define SUB_DET_DISABLE			0
@@ -147,11 +181,6 @@ enum {
 	FW_SDCARD,
 };
 
-enum {
-	NORMAL_MODE,
-	FACTORY_MODE,
-};
-
 struct fw_image {
 	u8 hdr_ver;
 	u8 hdr_len;
@@ -186,6 +215,17 @@ struct tsk_event_val tsk_ev_old[8] =
 	{0x0C, TSK_RELEASE, KEY_DUMMY_MENU, "dummy_menu"}
 };
 
+#ifdef FEATURE_GRIP_FOR_SAR
+struct tsk_event_val tsk_ev[6] =
+{
+	{0x01 << 0, TSK_PRESS, KEY_RECENT, "recent"},
+	{0x01 << 1, TSK_PRESS, KEY_BACK, "back"},
+	{0x01 << 2, TSK_PRESS, KEY_CP_GRIP, "grip"},
+	{0x01 << 4, TSK_RELEASE, KEY_RECENT, "recent"},
+	{0x01 << 5, TSK_RELEASE, KEY_BACK, "back"},
+	{0x01 << 6, TSK_RELEASE, KEY_CP_GRIP, "grip"}
+};
+#else
 struct tsk_event_val tsk_ev[4] =
 {
 	{0x01 << 0, TSK_PRESS, KEY_RECENT, "recent"},
@@ -193,6 +233,8 @@ struct tsk_event_val tsk_ev[4] =
 	{0x01 << 4, TSK_RELEASE, KEY_RECENT, "recent"},
 	{0x01 << 5, TSK_RELEASE, KEY_BACK, "back"}
 };
+#endif
+
 
 struct tsk_event_val tsk_ev_swap[4] =
 {
@@ -223,11 +265,11 @@ struct tc300k_data {
 	u8 fw_ver;
 	u8 fw_ver_bin;
 	u8 md_ver;
+	u8 md_ver_bin;
 	u8 fw_update_status;
 	bool enabled;
 	bool fw_downloding;
 	bool glove_mode;
-	bool factory_mode;
 	bool led_on;
 	bool flip_mode;
 
@@ -237,6 +279,27 @@ struct tc300k_data {
 	struct pinctrl *pinctrl_i2c;
 	struct pinctrl *pinctrl_irq;
 	struct pinctrl_state *pin_state[4];
+
+#ifdef FEATURE_GRIP_FOR_SAR
+	struct wake_lock touchkey_wake_lock;
+	u16 grip_p_thd;
+	u16 grip_r_thd;
+	u16 grip_n_thd;
+	u16 grip_s1;
+	u16 grip_s2;
+	u16 grip_baseline;
+	u16 grip_raw1;
+	u16 grip_raw2;
+	u16 grip_event;
+	bool sar_mode;
+	bool sar_enable;
+	bool sar_enable_off;
+	//struct completion resume_done;
+	//bool is_lpm_suspend;
+#if defined (CONFIG_VBUS_NOTIFIER)
+	struct notifier_block vbus_nb;
+#endif
+#endif
 };
 
 extern struct class *sec_class;
@@ -263,7 +326,6 @@ int get_tsp_status(void)
 static void tc300k_early_suspend(struct early_suspend *h);
 static void tc300k_late_resume(struct early_suspend *h);
 #endif
-
 static void tc300k_input_close(struct input_dev *dev);
 static int tc300k_input_open(struct input_dev *dev);
 static int tc300_pinctrl_init(struct tc300k_data *data);
@@ -271,6 +333,130 @@ static void tc300_config_gpio_i2c(struct tc300k_data *data, int onoff);
 static int tc300_pinctrl(struct tc300k_data *data, int status);
 static int read_tc350k_register_data(struct tc300k_data *data, int read_key_num, int read_offset);
 static int tc300k_mode_enable(struct i2c_client *client, u8 cmd);
+
+static int tc300k_mode_check(struct i2c_client *client)
+{
+	int mode = i2c_smbus_read_byte_data(client, TC300K_MODE);
+	if (mode < 0)
+		dev_err(&client->dev, "[TK] %s: failed to read mode (%d)\n",
+			__func__, mode);
+
+	return mode;
+}
+
+#ifdef FEATURE_GRIP_FOR_SAR
+
+static int tc300k_wake_up(struct i2c_client *client, u8 cmd)
+{
+	//If stop mode enabled, touch key IC need wake_up CMD
+	//After wake_up CMD, IC need 10ms delay
+
+	int ret;
+	dev_info(&client->dev, "%s Send WAKE UP cmd: 0x%02x \n", __func__, cmd);
+	ret = i2c_smbus_write_byte_data(client, TC300K_CMD_ADDR, TC300K_CMD_WAKE_UP);
+	msleep(10);
+
+	return ret;
+}
+
+static void tc300k_stop_mode(struct tc300k_data *data, bool on)
+{
+	struct i2c_client *client = data->client;
+	int retry = 3;
+	int ret;
+	u8 cmd;
+	int mode_retry = 1;
+	bool mode;
+
+	if (data->sar_mode == on){
+		dev_err(&client->dev, "[TK] %s : skip already %s\n",
+				__func__, on ? "stop mode":"normal mode");
+		return;
+	}
+
+	if (on)
+		cmd = TC300K_CMD_STOP_MODE;
+	else
+		cmd = TC300K_CMD_NORMAL_MODE;
+
+	dev_info(&client->dev, "[TK] %s: %s, cmd=%x\n",
+			__func__, on ? "stop mode" : "normal mode", cmd);
+sar_mode:
+	//Add wake up command before change mode from STOP mode to NORMAL mode
+	if (on == 0 && data->sar_mode == 1) {
+		ret = tc300k_wake_up(client, TC300K_CMD_WAKE_UP);
+	}
+
+	while (retry > 0) {
+		ret = tc300k_mode_enable(client, cmd);
+		if (ret < 0) {
+			dev_err(&client->dev, "%s fail to write mode(%d), retry %d\n",
+					__func__, ret, retry);
+			retry--;
+			msleep(20);
+			continue;
+		}
+		break;
+	}
+
+	msleep(20);
+
+	// Add wake up command before i2c read/write in STOP mode
+	if (on == 1) {
+		ret = tc300k_wake_up(client, TC300K_CMD_WAKE_UP);
+	}
+
+	retry = 3;
+	while (retry > 0) {
+		ret = tc300k_mode_check(client);
+		if (ret < 0) {
+			dev_err(&client->dev, "%s fail to read mode(%d), retry %d\n",
+					__func__, ret, retry);
+			retry--;
+			msleep(20);
+			continue;
+		}
+		break;
+	}
+
+	/*	RUN MODE
+	  *	1 : NORMAL TOUCH MODE
+	  *	0 : STOP MODE
+	  */
+	mode = !(ret & TC300K_MODE_RUN);
+
+	dev_info(&client->dev, "%s: run mode:%s reg:%x\n",
+			__func__, mode ? "stop": "normal", ret);
+
+	if((mode != on) && (mode_retry == 1)){
+		dev_err(&client->dev, "%s change fail retry %d, %d\n", __func__, mode, on);
+		mode_retry = 0;
+		goto sar_mode;
+	}
+
+	data->sar_mode = mode;
+}
+
+static void touchkey_sar_sensing(struct tc300k_data *data, bool on)
+{
+	/* enable/disable sar sensing
+	  * need to disable when earjack is connected (FM radio can't work normally)
+	  */
+}
+
+static void tc300k_grip_cal_reset(struct tc300k_data *data)
+{
+	/* calibrate grip sensor chn */
+	struct i2c_client *client = data->client;
+
+	dev_info(&client->dev, "[TK] %s\n", __func__);
+	i2c_smbus_write_byte_data(client, TC300K_CMD_ADDR, TC300K_CMD_GRIP_BASELINE_CAL);
+	msleep(TC300K_CMD_DELAY);
+}
+
+#endif
+
+
 
 static void tc300k_release_all_fingers(struct tc300k_data *data)
 {
@@ -305,13 +491,18 @@ static void tc300k_reset(struct tc300k_data *data)
 	data->pdata->power(true);
 	data->pdata->keyled(true);
 	msleep(200);
-	enable_irq(data->client->irq);
 
 	if (data->flip_mode)
 		tc300k_mode_enable(data->client, TC300K_CMD_FLIP_ON);
 
 	if (data->glove_mode)
 		tc300k_mode_enable(data->client, TC300K_CMD_GLOVE_ON);
+#ifdef FEATURE_GRIP_FOR_SAR
+	if (data->sar_enable)
+		tc300k_mode_enable(data->client, TC300K_CMD_SAR_ENABLE);
+#endif
+
+	enable_irq(data->client->irq);
 }
 
 static void tc300k_reset_probe(struct tc300k_data *data)
@@ -358,6 +549,42 @@ int tc300k_get_fw_version(struct tc300k_data *data, bool probe)
 	}
 	data->fw_ver = (u8)buf;
 	dev_info(&client->dev, "[TK]fw_ver : 0x%x\n", data->fw_ver);
+
+	return 0;
+}
+
+int tc300k_get_md_version(struct tc300k_data *data, bool probe)
+{
+	struct i2c_client *client = data->client;
+	int retry = 3;
+	int buf;
+
+	if ((!data->enabled) || data->fw_downloding) {
+		dev_err(&client->dev, "[TK]can't excute %s\n", __func__);
+		return -1;
+	}
+
+	buf = i2c_smbus_read_byte_data(client, TC300K_MDVER);
+	if (buf < 0) {
+		while (retry--) {
+			dev_err(&client->dev, "[TK]%s read fail(%d)\n",
+				__func__, retry);
+			if (probe)
+				tc300k_reset_probe(data);
+			else
+				tc300k_reset(data);
+			buf = i2c_smbus_read_byte_data(client, TC300K_MDVER);
+			if (buf > 0)
+				break;
+		}
+		if (retry <= 0) {
+			dev_err(&client->dev, "[TK]%s read fail\n", __func__);
+			data->md_ver = 0;
+			return -1;
+		}
+	}
+	data->md_ver = (u8)buf;
+	dev_info(&client->dev, "[TK]md_ver : 0x%x\n", data->md_ver);
 
 	return 0;
 }
@@ -554,14 +781,26 @@ static irqreturn_t tc300k_interrupt(int irq, void *dev_id)
 	u8 key_val;
 	int i = 0;
 	bool key_handle_flag;
+#ifdef FEATURE_GRIP_FOR_SAR
+	wake_lock(&data->touchkey_wake_lock);
+#endif
 
 	dev_dbg(&client->dev, "[TK] %s\n",__func__);//okga
 
 	if ((!data->enabled) || data->fw_downloding) {
 		dev_err(&client->dev, "[TK] can't excute %s\n", __func__);
+#ifdef FEATURE_GRIP_FOR_SAR
+		wake_unlock(&data->touchkey_wake_lock);
+#endif
 		return IRQ_HANDLED;
 	}
 
+#ifdef FEATURE_GRIP_FOR_SAR
+	// if sar_mode is on => must send wake-up command
+	if (data->sar_mode) {
+		ret = tc300k_wake_up(client, TC300K_CMD_WAKE_UP);
+	}
+#endif
 	ret = i2c_smbus_read_byte_data(client, TC300K_KEYCODE);
 	if (ret < 0) {
 		retry = 3;
@@ -575,6 +814,9 @@ static irqreturn_t tc300k_interrupt(int irq, void *dev_id)
 		}
 		if (retry <= 0) {
 			tc300k_reset(data);
+#ifdef FEATURE_GRIP_FOR_SAR
+			wake_unlock(&data->touchkey_wake_lock);
+#endif
 			return IRQ_HANDLED;
 		}
 	}
@@ -603,13 +845,233 @@ static irqreturn_t tc300k_interrupt(int irq, void *dev_id)
 			input_booster_send_event(data->tsk_ev_val[i].tsk_keycode,
 				data->tsk_ev_val[i].tsk_status ? BOOSTER_MODE_ON : BOOSTER_MODE_OFF);
 #endif
+#ifdef FEATURE_GRIP_FOR_SAR
+			if (data->tsk_ev_val[i].tsk_keycode == KEY_CP_GRIP) {
+				data->grip_event = data->tsk_ev_val[i].tsk_status;
+			}
+#endif
 		}
 	}
 
 	input_sync(data->input_dev);
+#ifdef FEATURE_GRIP_FOR_SAR
+	wake_unlock(&data->touchkey_wake_lock);
+#endif
 	return IRQ_HANDLED;
 }
 
+static ssize_t keycode_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = data->client;
+	int ret;
+
+	if ((!data->enabled) || data->fw_downloding) {
+		dev_err(&client->dev, "[TK] can't excute %s\n", __func__);
+		return -EPERM;
+	}
+
+	
+	ret = i2c_smbus_read_byte_data(client, TC300K_KEYCODE);
+	if (ret < 0) {
+		dev_err(&client->dev, "[TK] %s: failed to read threshold_h (%d)\n",
+			__func__, ret);
+		return ret;
+	}
+	
+	return sprintf(buf, "%d\n", ret);
+}
+
+static ssize_t third_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = data->client;
+	int value;
+
+	if ((!data->enabled) || data->fw_downloding) {
+		dev_err(&client->dev, "[TK] can't excute %s\n", __func__);
+		return -EPERM;
+	}
+
+	if (data->pdata->tsk_ic_num == TC350K_TSK_IC) {
+		mutex_lock(&data->lock_fac);
+		value = read_tc350k_register_data(data, TC350K_3KEY, TC350K_CH_PER_DATA_OFFSET);
+		mutex_unlock(&data->lock_fac);
+		return sprintf(buf, "%d\n", value);
+	} 
+	else {
+		value = 0;
+		return sprintf(buf, "%d\n", value);
+	}
+		
+}
+
+static ssize_t third_raw_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = data->client;
+	int value;
+
+	if ((!data->enabled) || data->fw_downloding) {
+		dev_err(&client->dev, "[TK] can't excute %s\n", __func__);
+		return -EPERM;
+	}
+
+	if (data->pdata->tsk_ic_num == TC350K_TSK_IC) {
+		mutex_lock(&data->lock_fac);
+		value = read_tc350k_register_data(data, TC350K_3KEY, TC350K_CH_RAW_DATA_OFFSET);
+		mutex_unlock(&data->lock_fac);
+		return sprintf(buf, "%d\n", value);
+	} 
+	else {
+		value = 0;
+		return sprintf(buf, "%d\n", value);
+	}
+}
+
+static ssize_t fourth_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = data->client;
+	int value;
+
+	if ((!data->enabled) || data->fw_downloding) {
+		dev_err(&client->dev, "[TK] can't excute %s\n", __func__);
+		return -EPERM;
+	}
+
+	if (data->pdata->tsk_ic_num == TC350K_TSK_IC) {
+		mutex_lock(&data->lock_fac);
+		value = read_tc350k_register_data(data, TC350K_4KEY, TC350K_CH_PER_DATA_OFFSET);
+		mutex_unlock(&data->lock_fac);
+		return sprintf(buf, "%d\n", value);
+	} 
+	else {
+		value = 0;
+		return sprintf(buf, "%d\n", value);
+	}
+}
+
+static ssize_t fourth_raw_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = data->client;
+	int value;
+
+	if ((!data->enabled) || data->fw_downloding) {
+		dev_err(&client->dev, "[TK] can't excute %s\n", __func__);
+		return -EPERM;
+	}
+
+	if (data->pdata->tsk_ic_num == TC350K_TSK_IC) {
+		mutex_lock(&data->lock_fac);
+		value = read_tc350k_register_data(data, TC350K_4KEY, TC350K_CH_RAW_DATA_OFFSET);
+		mutex_unlock(&data->lock_fac);
+		return sprintf(buf, "%d\n", value);
+	} 
+	else {
+		value = 0;
+		return sprintf(buf, "%d\n", value);
+	}
+}
+
+static ssize_t debug_c0_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = data->client;
+	int ret;
+
+	if ((!data->enabled) || data->fw_downloding) {
+		dev_err(&client->dev, "[TK] can't excute %s\n", __func__);
+		return -EPERM;
+	}
+
+	
+	ret = i2c_smbus_read_byte_data(client, 0xC0);
+	if (ret < 0) {
+		dev_err(&client->dev, "[TK] %s: failed to read 0xC0 Register (%d)\n",
+			__func__, ret);
+		return ret;
+	}
+	
+	return sprintf(buf, "%d\n", ret);
+}
+
+static ssize_t debug_c1_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = data->client;
+	int ret;
+
+	if ((!data->enabled) || data->fw_downloding) {
+		dev_err(&client->dev, "[TK] can't excute %s\n", __func__);
+		return -EPERM;
+	}
+
+	
+	ret = i2c_smbus_read_byte_data(client, 0xC1);
+	if (ret < 0) {
+		dev_err(&client->dev, "[TK] %s: failed to read 0xC1 Register (%d)\n",
+			__func__, ret);
+		return ret;
+	}
+	
+	return sprintf(buf, "%d\n", ret);
+}
+
+
+static ssize_t debug_c2_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = data->client;
+	int ret;
+
+	if ((!data->enabled) || data->fw_downloding) {
+		dev_err(&client->dev, "[TK] can't excute %s\n", __func__);
+		return -EPERM;
+	}
+
+	
+	ret = i2c_smbus_read_byte_data(client, 0xC2);
+	if (ret < 0) {
+		dev_err(&client->dev, "[TK] %s: failed to read 0xC2 Register (%d)\n",
+			__func__, ret);
+		return ret;
+	}
+	
+	return sprintf(buf, "%d\n", ret);
+}
+
+static ssize_t debug_c3_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = data->client;
+	int ret;
+
+	if ((!data->enabled) || data->fw_downloding) {
+		dev_err(&client->dev, "[TK] can't excute %s\n", __func__);
+		return -EPERM;
+	}
+
+	
+	ret = i2c_smbus_read_byte_data(client, 0xC3);
+	if (ret < 0) {
+		dev_err(&client->dev, "[TK] %s: failed to read 0xC3 Register (%d)\n",
+			__func__, ret);
+		return ret;
+	}
+	
+	return sprintf(buf, "%d\n", ret);
+}
 static ssize_t tc300k_threshold_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -715,8 +1177,8 @@ static int load_fw_in_kernel(struct tc300k_data *data)
 	}
 	data->fw_img = (struct fw_image *)data->fw->data;
 
-	dev_info(&client->dev, "[TK] 0x%x firm (size=%d)\n",
-		data->fw_img->first_fw_ver, data->fw_img->fw_len);
+	dev_info(&client->dev, "[TK] 0x%x 0x%x firm (size=%d)\n",
+		data->fw_img->first_fw_ver, data->fw_img->second_fw_ver, data->fw_img->fw_len);
 	dev_info(&client->dev, "[TK] %s done\n", __func__);
 
 	return 0;
@@ -1081,7 +1543,6 @@ static int tc300k_crc_check(struct tc300k_data *data)
 {
 	struct i2c_client *client = data->client;
 	int ret;
-	u16 checksum;
 	u8 cmd;
 	u8 checksum_h, checksum_l;
 
@@ -1115,16 +1576,16 @@ static int tc300k_crc_check(struct tc300k_data *data)
 	}
 	checksum_l = ret;
 
-	checksum = (checksum_h << 8) | checksum_l;
+	data->checksum = (checksum_h << 8) | checksum_l;
 
-	if (data->fw_img->checksum != checksum) {
+	if (data->fw_img->checksum != data->checksum) {
 		dev_err(&client->dev,
 			"%s checksum fail - firm checksum(%d), compute checksum(%d)\n",
-			__func__, data->fw_img->checksum, checksum);
+			__func__, data->fw_img->checksum, data->checksum);
 		return -1;
 	}
 
-	dev_info(&client->dev, "[TK] %s success (%d)\n", __func__, checksum);
+	dev_info(&client->dev, "[TK] %s success (%d)\n", __func__, data->checksum);
 
 	return 0;
 }
@@ -1141,7 +1602,8 @@ static int tc300k_fw_update(struct tc300k_data *data, u8 fw_path, bool force)
 			return -1;
 
 		data->fw_ver_bin = data->fw_img->first_fw_ver;
-		if (!force && (data->fw_ver == data->fw_ver_bin)) {
+		data->md_ver_bin = data->fw_img->second_fw_ver;
+		if (!force && (data->fw_ver == data->fw_ver_bin) && (data->md_ver == data->md_ver_bin)) {
 			dev_notice(&client->dev, "[TK] do not need firm update (IC:0x%x, BIN:0x%x)\n",
 				data->fw_ver, data->fw_ver_bin);
 			t300k_release_fw(data, fw_path);
@@ -1175,6 +1637,17 @@ static int tc300k_fw_update(struct tc300k_data *data, u8 fw_path, bool force)
 			continue;
 		}
 
+		ret = tc300k_get_md_version(data, false);
+		if (ret) {
+			dev_err(&client->dev, "[TK] %s tc300k_get_md_version fail (%d)\n",
+				__func__, retry);
+			continue;
+		}
+		if (data->md_ver != data->fw_img->second_fw_ver) {
+			dev_err(&client->dev, "[TK] %s md version fail (0x%x, 0x%x)(%d)\n",
+				__func__, data->md_ver, data->fw_img->second_fw_ver, retry);
+			continue;
+		}
 		ret = tc300k_crc_check(data);
 		if (ret) {
 			dev_err(&client->dev, "[TK] %s crc check fail (%d)\n",
@@ -1273,6 +1746,14 @@ static ssize_t tc300k_firm_version_show(struct device *dev,
 	return sprintf(buf, "0x%02x\n", data->fw_ver_bin);
 }
 
+static ssize_t tc300k_md_version_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+
+	return sprintf(buf, "0x%02x\n", data->md_ver_bin);
+}
+
 static ssize_t tc300k_firm_version_read_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -1286,6 +1767,21 @@ static ssize_t tc300k_firm_version_read_show(struct device *dev,
 			__func__, ret);
 
 	return sprintf(buf, "0x%02x\n", data->fw_ver);
+}
+
+static ssize_t tc300k_md_version_read_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = data->client;
+	int ret;
+
+	ret = tc300k_get_md_version(data, false);
+	if (ret < 0)
+		dev_err(&client->dev, "[TK] %s: failed to read md version (%d)\n",
+			__func__, ret);
+
+	return sprintf(buf, "0x%02x\n", data->md_ver);
 }
 
 static ssize_t recent_key_show(struct device *dev,
@@ -1921,81 +2417,12 @@ static ssize_t recent_threshold_outer(struct device *dev,
 	return sprintf(buf, "%d\n", value);
 }
 
-
-static int tc300k_factory_mode_enable(struct i2c_client *client, u8 cmd)
-{
-	int ret;
-
-	ret = i2c_smbus_write_byte_data(client, TC300K_CMD_ADDR, cmd);
-	msleep(TC300K_CMD_DELAY);
-
-	return ret;
-}
-
-static ssize_t tc300k_factory_mode(struct device *dev,
-	 struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct tc300k_data *data = dev_get_drvdata(dev);
-	struct i2c_client *client = data->client;
-	int scan_buffer;
-	int ret;
-	u8 cmd;
-
-	ret = sscanf(buf, "%d", &scan_buffer);
-	if (ret != 1) {
-		dev_err(&client->dev, "[TK] %s: cmd read err\n", __func__);
-		return count;
-	}
-
-	if (!(scan_buffer == 0 || scan_buffer == 1)) {
-		dev_err(&client->dev, "[TK] %s: wrong command(%d)\n",
-			__func__, scan_buffer);
-		return count;
-	}
-
-	if (data->factory_mode == (bool)scan_buffer) {
-		dev_info(&client->dev, "[TK] %s same command(%d)\n",
-			__func__, scan_buffer);
-		return count;
-	}
-
-	if (scan_buffer == 1) {
-		dev_notice(&client->dev, "[TK] factory mode\n");
-		cmd = TC300K_CMD_FAC_ON;
-	} else {
-		dev_notice(&client->dev, "[TK] normal mode\n");
-		cmd = TC300K_CMD_FAC_OFF;
-	}
-
-	if ((!data->enabled) || data->fw_downloding) {
-		dev_err(&client->dev, "[TK] can't excute %s\n", __func__);
-		data->factory_mode = (bool)scan_buffer;
-		return count;
-	}
-
-	ret = tc300k_factory_mode_enable(client, cmd);
-	if (ret < 0)
-		dev_err(&client->dev, "[TK] %s fail(%d)\n", __func__, ret);
-
-	data->factory_mode = (bool)scan_buffer;
-
-	return count;
-}
-
-static ssize_t tc300k_factory_mode_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct tc300k_data *data = dev_get_drvdata(dev);
-
-	return sprintf(buf, "%d\n", data->factory_mode);
-}
-
 static int tc300k_mode_enable(struct i2c_client *client, u8 cmd)
 {
 	int ret;
 
 	ret = i2c_smbus_write_byte_data(client, TC300K_CMD_ADDR, cmd);
-	msleep(TC300K_CMD_DELAY);
+	msleep(30);
 
 	return ret;
 }
@@ -2086,31 +2513,365 @@ out:
 	return count;
 }
 
+#ifdef FEATURE_GRIP_FOR_SAR
+static ssize_t touchkey_sar_enable(struct device *dev,
+		 struct device_attribute *attr, const char *buf,
+		 size_t count)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = data->client;
+	int buff;
+	int ret;
+	bool on;
+	int cmd;
+
+	ret = sscanf(buf, "%d", &buff);
+	if (ret != 1) {
+		dev_err(&client->dev, "%s: cmd read err\n", __func__);
+		return count;
+	}
+
+	dev_info(&data->client->dev,
+				"%s (%d)\n", __func__, buff);
+//return count;	//temp
+
+	if (!(buff >= 0 && buff <= 3)) {
+		dev_err(&client->dev, "%s: wrong command(%d)\n",
+				__func__, buff);
+		return count;
+	}
+
+	/*	sar enable param
+	  *	0	off
+	  *	1	on
+	  *	2	force off
+	  *	3	force off -> on
+	  */
+
+	if (buff == 3) {
+		data->sar_enable_off = 0;
+		dev_info(&data->client->dev,
+				"%s : Power back off _ force off -> on (%d)\n",
+				__func__, data->sar_enable);
+		if (data->sar_enable)
+			buff = 1;
+		else
+			return count;
+	}
+
+	if (data->sar_enable_off) {
+		if (buff == 1)
+			data->sar_enable = true;
+		else
+			data->sar_enable = false;
+		dev_info(&data->client->dev,
+				"%s skip, Power back off _ force off mode (%d)\n",
+				__func__, data->sar_enable);
+		return count;
+	}
+
+	if (buff == 1) {
+		on = true;
+		cmd = TC300K_CMD_SAR_ENABLE;
+	} else if (buff == 2) {
+		on = false;
+		data->sar_enable_off = 1;
+		cmd = TC300K_CMD_SAR_DISABLE;
+	} else {
+		on = false;
+		cmd = TC300K_CMD_SAR_DISABLE;
+	}
+
+	// if sar_mode is on => must send wake-up command
+	if (data->sar_mode) {
+		ret = tc300k_wake_up(data->client, TC300K_CMD_WAKE_UP);
+	}
+
+	ret = tc300k_mode_enable(data->client, cmd);
+	if (ret < 0) {
+		dev_err(&data->client->dev, "%s fail(%d)\n", __func__, ret);
+		return count;
+	}
+
+
+	if (buff == 1) {
+		data->sar_enable = true;
+	} else {
+		input_report_key(data->input_dev, KEY_CP_GRIP, TSK_RELEASE);
+		data->grip_event = 0;
+		data->sar_enable = false;
+	}
+
+	dev_notice(&data->client->dev, "%s data:%d on:%d\n",__func__, buff, on);
+	return count;
+}
+
+static ssize_t touchkey_grip_threshold_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	int ret;
+
+	mutex_lock(&data->lock_fac);
+	ret = read_tc350k_register_data(data, TC305K_GRIP_THD_PRESS, 0);
+	mutex_unlock(&data->lock_fac);
+	if (ret < 0) {
+		dev_err(&data->client->dev, "%s fail to read press thd(%d)\n", __func__, ret);
+		data->grip_p_thd = 0;
+		return sprintf(buf, "%d\n", 0);
+	}
+	data->grip_p_thd = ret;
+
+	mutex_lock(&data->lock_fac);
+	ret = read_tc350k_register_data(data, TC305K_GRIP_THD_RELEASE, 0);
+	mutex_unlock(&data->lock_fac);
+	if (ret < 0) {
+		dev_err(&data->client->dev, "%s fail to read release thd(%d)\n", __func__, ret);
+		data->grip_r_thd = 0;
+		return sprintf(buf, "%d\n", 0);
+	}
+
+	data->grip_r_thd = ret;
+
+	mutex_lock(&data->lock_fac);
+	ret = read_tc350k_register_data(data, TC305K_GRIP_THD_NOISE, 0);
+	mutex_unlock(&data->lock_fac);
+	if (ret < 0) {
+		dev_err(&data->client->dev, "%s fail to read noise thd(%d)\n", __func__, ret);
+		data->grip_n_thd = 0;
+		return sprintf(buf, "%d\n", 0);
+	}
+	data->grip_n_thd = ret;
+
+	return sprintf(buf, "%d,%d,%d\n",
+			data->grip_p_thd, data->grip_r_thd, data->grip_n_thd );
+}
+
+static ssize_t touchkey_total_cap_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	int ret;
+
+	ret = i2c_smbus_read_byte_data(data->client, TC305K_GRIP_TOTAL_CAP);
+	if (ret < 0) {
+		dev_err(&data->client->dev, "%s fail(%d)\n", __func__, ret);
+		return sprintf(buf, "%d\n", 0);
+	}
+
+	return sprintf(buf, "%d\n", ret / 100);
+}
+
+static ssize_t touchkey_grip_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	int ret;
+
+	mutex_lock(&data->lock_fac);
+	ret = read_tc350k_register_data(data, TC305K_GRIP_DIFF_DATA, 0);
+	mutex_unlock(&data->lock_fac);
+	if (ret < 0) {
+		dev_err(&data->client->dev, "%s fail(%d)\n", __func__, ret);
+		data->grip_s1 = 0;
+		return sprintf(buf, "%d\n", 0);
+	}
+	data->grip_s1 = ret;
+
+	return sprintf(buf, "%d\n", data->grip_s1);
+}
+
+static ssize_t touchkey_grip_baseline_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	int ret;
+
+	mutex_lock(&data->lock_fac);
+	ret = read_tc350k_register_data(data, TC305K_GRIP_BASELINE, 0);
+	mutex_unlock(&data->lock_fac);
+	if (ret < 0) {
+		dev_err(&data->client->dev, "%s fail(%d)\n", __func__, ret);
+		data->grip_baseline = 0;
+		return sprintf(buf, "%d\n", 0);
+	}
+	data->grip_baseline = ret;
+
+	return sprintf(buf, "%d\n", data->grip_baseline);
+
+}
+
+static ssize_t touchkey_grip_raw_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	int ret;
+
+	mutex_lock(&data->lock_fac);
+	ret = read_tc350k_register_data(data, TC305K_GRIP_RAW_DATA, 0);
+	mutex_unlock(&data->lock_fac);
+	if (ret < 0) {
+		dev_err(&data->client->dev, "%s fail(%d)\n", __func__, ret);
+		data->grip_raw1 = 0;
+		data->grip_raw2 = 0;
+		return sprintf(buf, "%d\n", 0);
+	}
+	data->grip_raw1 = ret;
+	data->grip_raw2 = 0;
+
+	return sprintf(buf, "%d,%d\n", data->grip_raw1, data->grip_raw2);
+}
+
+static ssize_t touchkey_grip_gain_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d,%d,%d,%d\n", 0, 0, 0, 0);
+}
+
+static ssize_t touchkey_grip_check_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+
+	dev_info(&data->client->dev, "%s event:%d\n", __func__, data->grip_event);
+
+	return sprintf(buf, "%d\n", data->grip_event);
+}
+
+static ssize_t touchkey_grip_sw_reset(struct device *dev,
+		 struct device_attribute *attr, const char *buf,
+		 size_t count)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = data->client;
+	int buff;
+	int ret;
+
+	ret = sscanf(buf, "%d", &buff);
+	if (ret != 1) {
+		dev_err(&client->dev, "%s: cmd read err\n", __func__);
+		return count;
+	}
+
+	if (!(buff == 1)) {
+		dev_err(&client->dev, "%s: wrong command(%d)\n",
+			__func__, buff);
+		return count;
+	}
+
+	data->grip_event = 0;
+
+	dev_notice(&data->client->dev, "%s data(%d)\n", __func__, buff);
+
+	tc300k_grip_cal_reset(data);
+
+	return count;
+}
+
+static ssize_t touchkey_sensing_change(struct device *dev,
+		 struct device_attribute *attr, const char *buf,
+		 size_t count)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = data->client;
+	int ret, buff;
+
+	ret = sscanf(buf, "%d", &buff);
+	if (ret != 1) {
+		dev_err(&client->dev, "%s: cmd read err\n", __func__);
+		return count;
+	}
+
+	if (!(buff == 0 || buff == 1)) {
+		dev_err(&client->dev, "%s: wrong command(%d)\n",
+				__func__, buff);
+		return count;
+	}
+
+	touchkey_sar_sensing(data, buff);
+
+	dev_info(&data->client->dev, "%s earjack (%d)\n", __func__, buff);
+
+	return count;
+}
+
+static ssize_t touchkey_mode_change(struct device *dev,
+		 struct device_attribute *attr, const char *buf,
+		 size_t count)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = data->client;
+	int ret, buff;
+
+	ret = sscanf(buf, "%d", &buff);
+	if (ret != 1) {
+		dev_err(&client->dev, "%s: cmd read err\n", __func__);
+		return count;
+	}
+
+	if (!(buff == 0 || buff == 1)) {
+		dev_err(&client->dev, "%s: wrong command(%d)\n", __func__, buff);
+		return count;
+	}
+
+	dev_info(&data->client->dev, "%s data(%d)\n", __func__, buff);
+
+	tc300k_stop_mode(data, buff);
+
+	return count;
+}
+#endif
+
 static ssize_t tc300k_modecheck_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	struct tc300k_data *data = dev_get_drvdata(dev);
 	struct i2c_client *client = data->client;
 	int ret;
-	u8 mode, glove, factory;
+	u8 mode, glove, run, sar, ta;
 
 	if ((!data->enabled) || data->fw_downloding) {
 		dev_err(&client->dev, "[TK] can't excute %s\n", __func__);
 		return -EPERM;
 	}
 
-	ret = i2c_smbus_read_byte_data(client, TC300K_MODE);
-	if (ret < 0) {
-		dev_err(&client->dev, "[TK] %s: failed to read threshold_h (%d)\n",
-			__func__, ret);
+	ret = tc300k_mode_check(client);
+	if (ret < 0)
 		return ret;
-	}
-	mode = ret;
+	else
+		mode = ret;
 
-	glove = ((mode & 0xf0) >> 4);
-	factory = mode & 0x0f;
+	glove = !!(mode & TC300K_MODE_GLOVE);
+	run = !!(mode & TC300K_MODE_RUN);
+	sar = !!(mode & TC300K_MODE_SAR);
+	ta = !!(mode & TC300K_MODE_TA_CONNECTED);
 
-	return sprintf(buf, "glove:%d, factory:%d\n", glove, factory);
+	dev_info(&client->dev, "%s: bit:%x, glove:%d, run:%d, sar:%d, ta:%d\n",
+			__func__, mode, glove, run, sar, ta);
+	return sprintf(buf, "bit:%x, glove:%d, run:%d, sar:%d, ta:%d\n",
+			mode, glove, run, sar, ta);
+}
+
+static ssize_t touchkey_chip_name(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = data->client;
+
+	dev_info(&client->dev, "%s\n", __func__);
+
+	return sprintf(buf, "TC305K\n");
+}
+
+static ssize_t touchkey_crc_check_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct tc300k_data *data = dev_get_drvdata(dev);
+	int ret;
+
+	ret = tc300k_crc_check(data);
+
+	return sprintf(buf, (ret == 0) ? "OK,%x\n" : "NG,%x\n", data->checksum);
 }
 
 static DEVICE_ATTR(touchkey_threshold, S_IRUGO, tc300k_threshold_show, NULL);
@@ -2124,6 +2885,10 @@ static DEVICE_ATTR(touchkey_firm_version_phone, S_IRUGO,
 		tc300k_firm_version_show, NULL);
 static DEVICE_ATTR(touchkey_firm_version_panel, S_IRUGO,
 		tc300k_firm_version_read_show, NULL);
+static DEVICE_ATTR(touchkey_md_version_phone, S_IRUGO,
+		tc300k_md_version_show, NULL);
+static DEVICE_ATTR(touchkey_md_version_panel, S_IRUGO,
+		tc300k_md_version_read_show, NULL);
 static DEVICE_ATTR(touchkey_recent, S_IRUGO, recent_key_show, NULL);
 static DEVICE_ATTR(touchkey_recent_ref, S_IRUGO, recent_key_ref_show, NULL);
 static DEVICE_ATTR(touchkey_back, S_IRUGO, back_key_show, NULL);
@@ -2162,13 +2927,38 @@ static DEVICE_ATTR(touchkey_recent_threshold_outer, S_IRUGO, recent_threshold_ou
 static DEVICE_ATTR(touchkey_back_threshold_outer, S_IRUGO, back_threshold_outer, NULL);
 /* end 350k */
 
-static DEVICE_ATTR(touchkey_factory_mode, S_IRUGO | S_IWUSR | S_IWGRP,
-		tc300k_factory_mode_show, tc300k_factory_mode);
 static DEVICE_ATTR(glove_mode, S_IRUGO | S_IWUSR | S_IWGRP,
 		tc300k_glove_mode_show, tc300k_glove_mode);
 static DEVICE_ATTR(flip_mode, S_IRUGO | S_IWUSR | S_IWGRP,
 		NULL, tc300k_flip_mode);
 static DEVICE_ATTR(modecheck, S_IRUGO, tc300k_modecheck_show, NULL);
+
+
+static DEVICE_ATTR(touchkey_keycode, S_IRUGO, keycode_show, NULL);
+static DEVICE_ATTR(touchkey_3rd, S_IRUGO, third_show, NULL);
+static DEVICE_ATTR(touchkey_3rd_raw, S_IRUGO, third_raw_show, NULL);
+static DEVICE_ATTR(touchkey_4th, S_IRUGO, fourth_show, NULL);
+static DEVICE_ATTR(touchkey_4th_raw, S_IRUGO, fourth_raw_show, NULL);
+static DEVICE_ATTR(touchkey_debug0, S_IRUGO, debug_c0_show, NULL);
+static DEVICE_ATTR(touchkey_debug1, S_IRUGO, debug_c1_show, NULL);
+static DEVICE_ATTR(touchkey_debug2, S_IRUGO, debug_c2_show, NULL);
+static DEVICE_ATTR(touchkey_debug3, S_IRUGO, debug_c3_show, NULL);
+
+#ifdef FEATURE_GRIP_FOR_SAR
+static DEVICE_ATTR(touchkey_grip_threshold, S_IRUGO, touchkey_grip_threshold_show, NULL);
+static DEVICE_ATTR(touchkey_total_cap, S_IRUGO, touchkey_total_cap_show, NULL);
+static DEVICE_ATTR(sar_enable, S_IWUSR | S_IWGRP, NULL, touchkey_sar_enable);
+static DEVICE_ATTR(sw_reset, S_IWUSR | S_IWGRP, NULL, touchkey_grip_sw_reset);
+static DEVICE_ATTR(touchkey_earjack, S_IWUSR | S_IWGRP, NULL, touchkey_sensing_change);
+static DEVICE_ATTR(touchkey_grip, S_IRUGO, touchkey_grip_show, NULL);
+static DEVICE_ATTR(touchkey_grip_baseline, S_IRUGO, touchkey_grip_baseline_show, NULL);
+static DEVICE_ATTR(touchkey_grip_raw, S_IRUGO, touchkey_grip_raw_show, NULL);
+static DEVICE_ATTR(touchkey_grip_gain, S_IRUGO, touchkey_grip_gain_show, NULL);
+static DEVICE_ATTR(touchkey_grip_check, S_IRUGO, touchkey_grip_check_show, NULL);
+static DEVICE_ATTR(touchkey_sar_only_mode,  S_IWUSR | S_IWGRP, NULL, touchkey_mode_change);
+#endif
+static DEVICE_ATTR(touchkey_chip_name, S_IRUGO, touchkey_chip_name, NULL);
+static DEVICE_ATTR(touchkey_crc_check, S_IRUGO, touchkey_crc_check_show, NULL);
 
 static struct attribute *sec_touchkey_attributes[] = {
 	&dev_attr_touchkey_threshold.attr,
@@ -2177,6 +2967,8 @@ static struct attribute *sec_touchkey_attributes[] = {
 	&dev_attr_touchkey_firm_update_status.attr,
 	&dev_attr_touchkey_firm_version_phone.attr,
 	&dev_attr_touchkey_firm_version_panel.attr,
+	&dev_attr_touchkey_md_version_phone.attr,
+	&dev_attr_touchkey_md_version_panel.attr,
 	&dev_attr_touchkey_recent.attr,
 	&dev_attr_touchkey_recent_ref.attr,
 	&dev_attr_touchkey_back.attr,
@@ -2189,10 +2981,35 @@ static struct attribute *sec_touchkey_attributes[] = {
 	&dev_attr_touchkey_back_raw_ref.attr,
 	&dev_attr_touchkey_d_menu_raw.attr,
 	&dev_attr_touchkey_d_back_raw.attr,
-	&dev_attr_touchkey_factory_mode.attr,
 	&dev_attr_glove_mode.attr,
 	&dev_attr_flip_mode.attr,
 	&dev_attr_modecheck.attr,
+	
+	&dev_attr_touchkey_keycode.attr,
+	&dev_attr_touchkey_3rd.attr,
+	&dev_attr_touchkey_3rd_raw.attr,
+	&dev_attr_touchkey_4th.attr,
+	&dev_attr_touchkey_4th_raw.attr,
+	&dev_attr_touchkey_debug0.attr,
+	&dev_attr_touchkey_debug1.attr,
+	&dev_attr_touchkey_debug2.attr,
+	&dev_attr_touchkey_debug3.attr,
+	
+#ifdef FEATURE_GRIP_FOR_SAR
+	&dev_attr_touchkey_grip_threshold.attr,
+	&dev_attr_touchkey_total_cap.attr,
+	&dev_attr_sar_enable.attr,
+	&dev_attr_sw_reset.attr,
+	&dev_attr_touchkey_earjack.attr,
+	&dev_attr_touchkey_grip.attr,
+	&dev_attr_touchkey_grip_baseline.attr,
+	&dev_attr_touchkey_grip_raw.attr,
+	&dev_attr_touchkey_grip_gain.attr,
+	&dev_attr_touchkey_grip_check.attr,
+	&dev_attr_touchkey_sar_only_mode.attr,
+#endif
+	&dev_attr_touchkey_chip_name.attr,
+	&dev_attr_touchkey_crc_check.attr,
 	NULL,
 };
 
@@ -2206,6 +3023,8 @@ static struct attribute *sec_touchkey_attributes_350k[] = {
 	&dev_attr_touchkey_firm_update_status.attr,
 	&dev_attr_touchkey_firm_version_phone.attr,
 	&dev_attr_touchkey_firm_version_panel.attr,
+	&dev_attr_touchkey_md_version_phone.attr,
+	&dev_attr_touchkey_md_version_panel.attr,
 
 	&dev_attr_touchkey_back_raw_inner.attr,
 	&dev_attr_touchkey_back_raw_outer.attr,
@@ -2236,8 +3055,33 @@ static struct attribute *sec_touchkey_attributes_350k[] = {
 	&dev_attr_touchkey_threshold.attr,
 
 	&dev_attr_flip_mode.attr,
-	&dev_attr_touchkey_factory_mode.attr,
 	&dev_attr_modecheck.attr,
+
+	&dev_attr_touchkey_keycode.attr,
+	&dev_attr_touchkey_3rd.attr,
+	&dev_attr_touchkey_3rd_raw.attr,
+	&dev_attr_touchkey_4th.attr,
+	&dev_attr_touchkey_4th_raw.attr,
+	&dev_attr_touchkey_debug0.attr,
+	&dev_attr_touchkey_debug1.attr,
+	&dev_attr_touchkey_debug2.attr,
+	&dev_attr_touchkey_debug3.attr,
+	
+#ifdef FEATURE_GRIP_FOR_SAR
+	&dev_attr_touchkey_grip_threshold.attr,
+	&dev_attr_touchkey_total_cap.attr,
+	&dev_attr_sar_enable.attr,
+	&dev_attr_sw_reset.attr,
+	&dev_attr_touchkey_earjack.attr,
+	&dev_attr_touchkey_grip.attr,
+	&dev_attr_touchkey_grip_baseline.attr,
+	&dev_attr_touchkey_grip_raw.attr,
+	&dev_attr_touchkey_grip_gain.attr,
+	&dev_attr_touchkey_grip_check.attr,
+	&dev_attr_touchkey_sar_only_mode.attr,
+#endif
+	&dev_attr_touchkey_chip_name.attr,
+	&dev_attr_touchkey_crc_check.attr,
 	NULL,
 };
 
@@ -2245,6 +3089,46 @@ static struct attribute_group sec_touchkey_attr_group_350k = {
 	.attrs = sec_touchkey_attributes_350k,
 };
 
+#if defined (CONFIG_VBUS_NOTIFIER) && defined(FEATURE_GRIP_FOR_SAR)
+static int tkey_vbus_notification(struct notifier_block *nb,
+		unsigned long cmd, void *data)
+{
+	struct tc300k_data *tkey_data = container_of(nb, struct tc300k_data, vbus_nb);
+	struct i2c_client *client = tkey_data->client;
+	vbus_status_t vbus_type = *(vbus_status_t *)data;
+	int ret;
+
+	printk("%s cmd=%lu, vbus_type=%d\n", __func__, cmd, vbus_type);
+
+	switch (vbus_type) {
+	case STATUS_VBUS_HIGH:
+		printk("%s : attach\n",__func__);
+		// if sar_mode is on => must send wake-up command
+		if (tkey_data->sar_mode)
+			ret = tc300k_wake_up(client, TC300K_CMD_WAKE_UP);
+
+		ret = tc300k_mode_enable(client, TC300K_CMD_TA_ON);
+		if (ret < 0)
+			dev_err(&client->dev, "[TK] %s TA mode ON fail(%d)\n", __func__, ret);
+		break;
+	case STATUS_VBUS_LOW:
+		printk("%s : detach\n",__func__);
+		// if sar_mode is on => must send wake-up command
+		if (tkey_data->sar_mode)
+			ret = tc300k_wake_up(client, TC300K_CMD_WAKE_UP);
+
+		ret = tc300k_mode_enable(client, TC300K_CMD_TA_OFF);
+		if (ret < 0)
+			dev_err(&client->dev, "[TK] %s TA mode OFF fail(%d)\n", __func__, ret);
+		break;
+	default:
+		break;
+	}
+
+	return 0;
+}
+
+#endif
 
 static int tc300k_connecter_check(struct tc300k_data *data)
 {
@@ -2295,10 +3179,26 @@ static int tc300k_fw_check(struct tc300k_data *data)
 		}
 	}
 
+	ret = tc300k_get_md_version(data, true);
 
-	if (data->fw_ver == 0xFF) {
+	if (ret < 0) {
+		if ((tsk_connecter_status == SUB_DET_ENABLE_CON_ON)||(tsk_connecter_status == SUB_DET_DISABLE)) {
+			dev_err(&client->dev,
+				"[TK] %s: i2c fail, But TSK IC is connected!\n", __func__);
+			data->md_ver = 0xFF;
+		} else {
+			dev_err(&client->dev,
+				"[TK] %s: i2c fail...[%d], addr[%d]\n",
+				__func__, ret, data->client->addr);
+			dev_err(&client->dev,
+				"[TK] %s: touchkey driver unload\n", __func__);
+			return ret;
+		}
+	}
+
+	if (data->fw_ver == 0xFF || data->md_ver == 0xFF) {
 		dev_notice(&client->dev,
-			"[TK] fw version 0xFF, Excute firmware update!\n");
+			"[TK] fw version 0xFF, or md version 0xFF. Excute firmware update!\n");
 		ret = tc300k_fw_update(data, FW_INKERNEL, true);
 		if (ret)
 			return -1;
@@ -2543,6 +3443,10 @@ static int __devinit tc300k_probe(struct i2c_client *client,
 	}
 	data->irq = pdata->gpio_int;
 
+
+#ifdef FEATURE_GRIP_FOR_SAR
+	wake_lock_init(&data->touchkey_wake_lock, WAKE_LOCK_SUSPEND, "touchkey wake lock");
+#endif
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	data->early_suspend.level = EARLY_SUSPEND_LEVEL_BLANK_SCREEN + 1;
 	data->early_suspend.suspend = tc300k_early_suspend;
@@ -2576,11 +3480,26 @@ static int __devinit tc300k_probe(struct i2c_client *client,
 
 	dev_set_drvdata(data->sec_touchkey, data);
 
+#if defined (CONFIG_VBUS_NOTIFIER) && defined(FEATURE_GRIP_FOR_SAR)
+	vbus_notifier_register(&data->vbus_nb, tkey_vbus_notification,
+			       VBUS_NOTIFY_DEV_CHARGER);
+#endif
+
+#ifdef FEATURE_GRIP_FOR_SAR
+	ret = tc300k_mode_check(client);
+	if (ret >= 0) {
+		data->sar_enable = !!(ret & TC300K_MODE_SAR);
+		dev_info(&client->dev, "%s: mode %d, sar %d\n",
+				__func__, ret, data->sar_enable);
+	}
+	device_init_wakeup(&client->dev, true);
+#endif
 	dev_info(&client->dev, "[TK] %s done\n", __func__);
 	return 0;
 
 err_request_irq:
 	input_unregister_device(input_dev);
+	input_dev = NULL;
 err_register_input_dev:
 err_fw_check:
 	mutex_destroy(&data->lock);
@@ -2602,9 +3521,12 @@ static int __devexit tc300k_remove(struct i2c_client *client)
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	unregister_early_suspend(&data->early_suspend);
 #endif
+#ifdef FEATURE_GRIP_FOR_SAR
+	device_init_wakeup(&client->dev, false);
+	wake_lock_destroy(&data->touchkey_wake_lock);
+#endif
 	free_irq(client->irq, data);
 	input_unregister_device(data->input_dev);
-	input_free_device(data->input_dev);
 	mutex_destroy(&data->lock);
 	mutex_destroy(&data->lock_fac);
 	data->pdata->keyled(false);
@@ -2621,11 +3543,21 @@ static void tc300k_shutdown(struct i2c_client *client)
 {
 	struct tc300k_data *data = i2c_get_clientdata(client);
 
+#ifdef FEATURE_GRIP_FOR_SAR
+	device_init_wakeup(&client->dev, false);
+	wake_lock_destroy(&data->touchkey_wake_lock);
+#endif
+
+	disable_irq(client->irq);
+	data->enabled = false;
+	tc300k_release_all_fingers(data);
 	data->pdata->keyled(false);
 	data->pdata->power(false);
+	data->led_on = false;
 }
 
 #if defined(CONFIG_PM)
+#ifndef FEATURE_GRIP_FOR_SAR
 static int tc300k_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
@@ -2698,15 +3630,11 @@ static int tc300k_resume(struct device *dev)
 			dev_err(&client->dev, "[TK] %s flipmode fail(%d)\n", __func__, ret);
 	}
 
-	if (data->factory_mode) {
-		ret = tc300k_factory_mode_enable(client, TC300K_CMD_FAC_ON);
-		if (ret < 0)
-			dev_err(&client->dev, "[TK] %s factorymode fail(%d)\n", __func__, ret);
-	}
 	mutex_unlock(&data->lock);
 
 	return 0;
 }
+#endif
 
 #ifdef CONFIG_HAS_EARLYSUSPEND
 static void tc300k_early_suspend(struct early_suspend *h)
@@ -2727,22 +3655,40 @@ static void tc300k_late_resume(struct early_suspend *h)
 static void tc300k_input_close(struct input_dev *dev)
 {
 	struct tc300k_data *data = input_get_drvdata(dev);
+#ifdef FEATURE_GRIP_FOR_SAR
+	dev_info(&data->client->dev,
+			"%s: sar_enable(%d)\n", __func__, data->sar_enable);
+	tc300k_stop_mode(data, 1);
+
+	if (device_may_wakeup(&data->client->dev))
+		enable_irq_wake(data->client->irq);
+#else
 	dev_info(&data->client->dev, "[TK] %s: users=%d\n", __func__,
 		   data->input_dev->users);
 
 	tc300k_suspend(&data->client->dev);
 	tc300_pinctrl(data, I_STATE_OFF_IRQ);
+#endif
 }
 
 static int tc300k_input_open(struct input_dev *dev)
 {
 	struct tc300k_data *data = input_get_drvdata(dev);
 
+#ifdef FEATURE_GRIP_FOR_SAR
+	dev_info(&data->client->dev,
+			"%s: sar_enable(%d)\n", __func__, data->sar_enable);
+	tc300k_stop_mode(data, 0);
+
+	if (device_may_wakeup(&data->client->dev))
+		disable_irq_wake(data->client->irq);
+#else
 	dev_info(&data->client->dev, "[TK] %s: users=%d\n", __func__,
 		   data->input_dev->users);
 
 	tc300_pinctrl(data, I_STATE_ON_IRQ);
 	tc300k_resume(&data->client->dev);
+#endif
 
 	return 0;
 }

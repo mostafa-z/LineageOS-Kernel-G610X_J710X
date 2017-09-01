@@ -10,7 +10,9 @@
 #define UI_DEFAULT_BRIGHTNESS	128
 #define NORMAL_TEMPERATURE	25	/* 25 degrees Celsius */
 
-#define HX8279D_ID_REG				0xB1
+#define HX8279D_ID_REG				0xFC
+#define HX8279D_DUAL_REG				0xB1
+
 #define HX8279D_ID_LEN				3 /* 1 */
 
 #define BOE_PANEL_ID 0x82790d

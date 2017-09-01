@@ -32,6 +32,12 @@ void mip4_tk_reboot(struct mip4_tk_info *info)
 	mip4_tk_power_on(info);
 	msleep(100);
 
+#ifdef CONFIG_TOUCHKEY_GRIP
+	if (info->sar_enable){
+		mip4_tk_set_sar_mode(info, 1);
+	}
+#endif
+
 	info->enabled = true;
 	enable_irq(info->irq);
 
@@ -134,6 +140,107 @@ DONE:
 	mutex_unlock(&info->lock);
 	return 0;
 }
+
+#ifdef CONFIG_TOUCHKEY_GRIP
+static void mip4_sar_only_mode(struct mip4_tk_info *info, int on)
+{
+	u8 cmd;
+	u8 wbuf[2];
+	u8 rbuf[1];
+	int ret;
+	int mode_retry = 1;	
+
+	if(info->sar_mode == on){
+		input_info(true, &info->client->dev, "%s : skip already %s\n", __func__, (on==1)? "sar only mode":"normal mode");
+		return;
+	}
+
+	if(on == 1)
+		cmd = MIP_CTRL_POWER_LOW;
+	else
+		cmd = MIP_CTRL_POWER_ACTIVE;
+
+	input_info(true, &info->client->dev, "%s : %s, cmd=%x\n", __func__, (on==1)? "sar only mode":"normal mode", cmd);	
+
+sar_mode:
+	ret = mip4_tk_set_power_state(info, cmd);
+	if(ret){
+		input_err(true, &info->client->dev, "%s fail(%d) \n", __func__, ret);
+	}
+	msleep(40);
+
+	wbuf[0] = MIP_R0_CTRL;
+	wbuf[1] = MIP_R1_CTRL_POWER_STATE;	
+	ret = mip4_tk_i2c_read(info, wbuf, 2, rbuf, 1);
+	if(ret){
+		input_err(true, &info->client->dev, "%s fail(%d)\n", __func__, ret);
+	}
+	input_info(true, &info->client->dev, "%s read reg = %x\n", __func__,rbuf[0]);
+
+	if( (rbuf[0] != cmd) && (mode_retry == 1) ){
+		input_err(true, &info->client->dev, "%s change fail retry\n", __func__);
+		mode_retry--;
+		goto sar_mode;
+	}
+
+	info->sar_mode = rbuf[0];
+	
+}
+#endif
+
+#if defined (CONFIG_MUIC_NOTIFIER) && defined(CONFIG_TOUCHKEY_GRIP)
+static int mip4_tk_cpuidle_muic_notification(struct notifier_block *nb,
+		unsigned long action, void *data)
+{
+	struct mip4_tk_info *info = container_of(nb, struct mip4_tk_info, cpuidle_muic_nb);
+	muic_attached_dev_t attached_dev = *(muic_attached_dev_t *)data;
+	u8 wbuf[3];	
+	int ret;
+
+	input_info(true, &info->client->dev, "%s action=%lu, attached_dev=%d\n", __func__, action, attached_dev);
+
+	wbuf[0] = MIP_R0_CTRL;
+	wbuf[1] = MIP_R1_CTRL_CHARGER_MODE;	
+
+	switch (attached_dev) {
+	case ATTACHED_DEV_OTG_MUIC:
+	case ATTACHED_DEV_USB_MUIC:
+	case ATTACHED_DEV_TA_MUIC:
+	case ATTACHED_DEV_AFC_CHARGER_PREPARE_MUIC:
+	case ATTACHED_DEV_AFC_CHARGER_9V_MUIC:
+		if (action == MUIC_NOTIFY_CMD_ATTACH) 
+		{
+			input_info(true, &info->client->dev, "%s : attach\n",__func__);
+			wbuf[2] = 1;
+			ret = mip4_tk_i2c_write(info, wbuf, 3);
+			if (ret < 0)
+				input_err(true, &info->client->dev, "%s attach fail(%d)\n", __func__, ret);
+		}
+		else if (action == MUIC_NOTIFY_CMD_DETACH) {
+			input_info(true, &info->client->dev, "%s : detach\n",__func__);
+			wbuf[2] = 0;
+			ret = mip4_tk_i2c_write(info, wbuf, 3);
+			if (ret < 0)
+				input_err(true, &info->client->dev, "%s detach fail(%d)\n", __func__, ret);
+		}
+		break;
+	default:
+		break;
+	}
+
+	wbuf[0] = MIP_R0_CTRL;
+	wbuf[1] = MIP_R1_CTRL_REBASELINE_GRIP;
+	wbuf[2] = 1;	
+
+	input_info(true, &info->client->dev, "%s rebaseline grip \n", __func__);
+	if (mip4_tk_i2c_write(info, wbuf, 3)) {
+		input_err(true,&info->client->dev, "%s [ERROR] mip4_tk_i2c_write\n", __func__);
+	}	
+
+	return 0;
+}
+
+#endif
 
 /*
  * Enable device
@@ -257,10 +364,18 @@ static int mip4_tk_input_open(struct input_dev *dev)
 		return 0;
 	}
 
+#ifdef CONFIG_TOUCHKEY_GRIP
+	input_info(true, &info->client->dev, "%s: sar_enable(%d)\n", __func__, info->sar_enable);
+	mip4_sar_only_mode(info, 0);
+	
+	if (device_may_wakeup(&info->client->dev))
+		disable_irq_wake(info->irq );
+#else
 #ifdef OPEN_CLOSE_WORK
 	schedule_delayed_work(&info->resume_work, msecs_to_jiffies(1));
 #else
 	mip4_tk_enable(info);
+#endif
 #endif
 
 	return 0;
@@ -278,11 +393,19 @@ static void mip4_tk_input_close(struct input_dev *dev)
 		return;
 	}
 
+#ifdef CONFIG_TOUCHKEY_GRIP
+	input_info(true, &info->client->dev, "%s: sar_enable(%d)\n", __func__, info->sar_enable);
+	mip4_sar_only_mode(info, 1);
+
+	if (device_may_wakeup(&info->client->dev))
+		enable_irq_wake(info->irq );
+	mip4_tk_clear_input(info);
+#else
 #ifdef OPEN_CLOSE_WORK
 	cancel_delayed_work(&info->resume_work);
 #endif
-
 	mip4_tk_disable(info);
+#endif
 
 	return;
 }
@@ -399,6 +522,7 @@ int mip4_tk_get_fw_version_from_bin(struct mip4_tk_info *info, u8 *ver_buf)
 
 	if (mip4_tk_bin_fw_version(info, fw->data, fw->size, ver_buf)) {
 		input_err(true, &info->client->dev,"%s [ERROR] mip4_tk_bin_fw_version\n", __func__);
+		release_firmware(fw);
 		goto ERROR;
 	}
 
@@ -411,6 +535,55 @@ ERROR:
 	return 1;
 }
 
+#ifdef CONFIG_TOUCHKEY_GRIP
+/*
+ * Set sar mode
+ */
+int mip4_tk_set_sar_mode(struct mip4_tk_info *info, u8 mode)
+{
+	u8 wbuf[3];
+
+	input_info(true, &info->client->dev, "%s - mode[%02X]\n", __func__, mode);
+
+
+	wbuf[0] = MIP_R0_CTRL;
+	wbuf[1] = MIP_R1_CTRL_ENABLE_GRIP;
+	wbuf[2] = mode;
+	if (mip4_tk_i2c_write(info, wbuf, 3)) {
+		input_err(true, &info->client->dev, "%s [ERROR] mip4_tk_i2c_write\n", __func__);
+		goto ERROR;
+	}
+
+	return 0;
+
+ERROR:
+	input_err(true, &info->client->dev, "%s [ERROR]\n", __func__);
+	return 1;
+}
+
+/*
+ * Get sar mode
+ */
+int mip4_tk_get_sar_mode(struct mip4_tk_info *info)
+{
+	u8 wbuf[3];
+	u8 rbuf[2];
+
+	wbuf[0] = MIP_R0_CTRL;
+	wbuf[1] = MIP_R1_CTRL_ENABLE_GRIP;
+	if (mip4_tk_i2c_read(info, wbuf, 2, rbuf, 1)) {
+		input_err(true, &info->client->dev, "%s [ERROR] mip4_tk_i2c_read\n", __func__);
+		goto ERROR;
+	} else {
+		input_info(true,&info->client->dev, "%s - addr[0x%02X%02X] value[%d]\n", __func__, wbuf[0], wbuf[1], rbuf[0]);
+	}
+	return rbuf[0];
+
+ERROR:
+	input_err(true, &info->client->dev, "%s [ERROR]\n", __func__);
+	return -1;
+}
+#endif
 /*
  * Set power state
  */
@@ -650,6 +823,11 @@ int mip4_tk_fw_update_from_kernel(struct mip4_tk_info *info, bool force)
 	mutex_lock(&info->device);
 	disable_irq(info->irq);
 
+#if defined(CONFIG_KEYBOARD_MELFAS_MHS2041) || defined(CONFIG_KEYBOARD_MELFAS_MHS2041B)
+	//Check IC id
+	mip4_tk_get_ic_id(info);
+#endif
+
 	request_firmware(&fw, fw_name, &info->client->dev);
 
 	if (!fw) {
@@ -701,6 +879,11 @@ int mip4_tk_fw_update_from_storage(struct mip4_tk_info *info, char *path, bool f
 
 	mutex_lock(&info->device);
  	disable_irq(info->irq);
+
+#if defined(CONFIG_KEYBOARD_MELFAS_MHS2041) || defined(CONFIG_KEYBOARD_MELFAS_MHS2041B)
+	//Check IC id
+	mip4_tk_get_ic_id(info);
+#endif
 
 	old_fs = get_fs();
 	set_fs(KERNEL_DS);
@@ -871,7 +1054,16 @@ int mip4_tk_init_config(struct mip4_tk_info *info)
 		goto ERROR;
 	}
 
+#ifdef CONFIG_TOUCHKEY_GRIP
+	info->key_num = rbuf[0] - info->grip_ch;
+	if (info->key_num < 0) {
+		input_err(true, &info->client->dev,
+			"%s [ERROR] key_num[%d] grip_ch_num[%d]\n", __func__, info->key_num, info->grip_ch);
+		goto ERROR;
+	}
+#else
 	info->key_num = rbuf[0];
+#endif
 	info->node_key = rbuf[0];
 
 	if (info->key_num > MAX_KEY_NUM) {
@@ -898,10 +1090,16 @@ int mip4_tk_init_config(struct mip4_tk_info *info)
 			"%s [ERROR] MAX_LED_NUM\n", __func__);
 		goto ERROR;
 	}
-
+	
+#ifdef CONFIG_TOUCHKEY_GRIP
+	input_info(true, &info->client->dev,
+			"%s - Key : %d, Grip : %d, LED : %d\n",
+			__func__, info->key_num, info->grip_ch, info->led_num);
+#else
 	input_info(true, &info->client->dev,
 			"%s - Key : %d, LED : %d\n",
 			__func__, info->key_num, info->led_num);
+#endif
 
 	/* Protocol */
 	wbuf[0] = MIP_R0_EVENT;
@@ -1103,7 +1301,7 @@ static int mip4_tk_probe(struct i2c_client *client, const struct i2c_device_id *
 	/* Set interrupt handler */
 	info->irq = client->irq;
 	ret = request_threaded_irq(client->irq, NULL,
-			mip4_tk_interrupt, IRQF_TRIGGER_LOW | IRQF_ONESHOT,
+			mip4_tk_interrupt, IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
 			MIP_DEV_NAME, info);
 	if (ret) {
 		input_err(true, &client->dev,
@@ -1112,6 +1310,10 @@ static int mip4_tk_probe(struct i2c_client *client, const struct i2c_device_id *
 
 		goto err_req_irq;
 	}
+
+#ifdef CONFIG_TOUCHKEY_GRIP
+	wake_lock_init(&info->touchkey_wake_lock, WAKE_LOCK_SUSPEND, "touchkey wake lock");
+#endif
 
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	info->early_suspend.level = EARLY_SUSPEND_LEVEL_BLANK_SCREEN +1;
@@ -1143,6 +1345,8 @@ static int mip4_tk_probe(struct i2c_client *client, const struct i2c_device_id *
 	if (mip4_tk_sysfs_create(info)) {
 		input_err(true, &client->dev,
 				"%s [ERROR] mip4_tk_sysfs_create\n", __func__);
+		ret = -EAGAIN;
+		goto err_sysfs_create;
 	}
 #endif
 
@@ -1152,19 +1356,39 @@ static int mip4_tk_probe(struct i2c_client *client, const struct i2c_device_id *
 		input_err(true, &client->dev,
 				"%s [ERROR] mip4_tk_sysfs_cmd_create\n",
 				__func__);
+		ret = -EAGAIN;
+		goto err_sysfs_cmd_create;		
 	}
 #endif
-
 	/* Create sysfs */
 	if (sysfs_create_group(&client->dev.kobj, &mip4_tk_attr_group)) {
 		input_err(true, &client->dev,
 				"%s [ERROR] sysfs_create_group\n", __func__);
+		ret = -EAGAIN;
+		goto err_create_attr_group;
 	}
 
 	if (sysfs_create_link(&info->key_dev->kobj, &info->input_dev->dev.kobj, "input")) {
 		input_err(true, &client->dev,
 				"%s [ERROR] sysfs_create_link\n", __func__);
+		ret = -EAGAIN;
+		goto err_create_link;
 	}
+
+#if defined (CONFIG_MUIC_NOTIFIER) && defined(CONFIG_TOUCHKEY_GRIP)
+	muic_notifier_register(&info->cpuidle_muic_nb, mip4_tk_cpuidle_muic_notification,
+			       MUIC_NOTIFY_DEV_CPUIDLE);
+#endif
+
+#ifdef CONFIG_TOUCHKEY_GRIP
+	ret = mip4_tk_get_sar_mode(info);
+	if( (ret && 0x0F) == 0x01 ){
+		mip4_tk_set_sar_mode(info,0);
+		info->sar_enable = 0;
+	}
+	device_init_wakeup(&client->dev, true);
+#endif
+
 	info->init = true;
 
 	input_info(true, &client->dev,
@@ -1172,7 +1396,23 @@ static int mip4_tk_probe(struct i2c_client *client, const struct i2c_device_id *
 
 	return 0;
 
+//	sysfs_remove_link(NULL, MIP_DEV_NAME);	
+err_create_link:	
+	sysfs_remove_group(&info->client->dev.kobj, &mip4_tk_attr_group);	
+err_create_attr_group:	
+#if MIP_USE_CMD
+	mip4_tk_sysfs_cmd_remove(info);
+err_sysfs_cmd_create:
+#endif
+#if MIP_USE_SYS
+	mip4_tk_sysfs_remove(info);
+err_sysfs_create:
+#endif	
+	device_destroy(info->class, info->mip4_tk_dev);
+	class_destroy(info->class);
+#if MIP_USE_DEV	
 err_dev_create:
+#endif
 	disable_irq(info->irq);
 err_req_irq:
 	input_unregister_device(input_dev);
@@ -1302,18 +1542,23 @@ void mip4_tk_shutdown(struct i2c_client *client)
 		return;
 
 	input_err(true, &info->client->dev, "%s\n", __func__);
-
+#if defined (CONFIG_MUIC_NOTIFIER) && defined(CONFIG_TOUCHKEY_GRIP)
+	muic_notifier_unregister(&info->cpuidle_muic_nb);
+#endif
 #ifdef OPEN_CLOSE_WORK
 	cancel_delayed_work(&info->resume_work);
 #endif
 
-	mip4_tk_power_off(info);
 	free_irq(info->irq, info);
 
+#if MIP_USE_CMD
+	mip4_tk_sysfs_cmd_remove(info);
+#endif
 	input_unregister_device(info->input_dev);
 	info->input_dev = NULL;
 	mutex_destroy(&info->lock);
 	mutex_destroy(&info->device);
+	mip4_tk_power_off(info);
 	kfree(info);
 }
 

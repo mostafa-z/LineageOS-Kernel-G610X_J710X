@@ -48,11 +48,6 @@ struct lcd_info {
 	struct dsim_device		*dsim;
 	struct mutex			lock;
 
-	struct pinctrl			*pins;
-	struct pinctrl_state		*pins_state[2];
-	struct pinctrl			*pins_pwm;
-	struct pinctrl_state		*pins_state_pwm[2];
-
 	struct pwm_device		*pwm;
 	unsigned int			pwm_period;
 	unsigned int			pwm_min;
@@ -66,7 +61,7 @@ static int dsim_write_hl_data(struct lcd_info *lcd, const u8 *cmd, u32 cmdSize)
 	int retry;
 	struct panel_private *priv = &lcd->dsim->priv;
 
-	if (priv->lcdConnected == PANEL_DISCONNEDTED)
+	if (!priv->lcdConnected)
 		return cmdSize;
 
 	retry = 5;
@@ -95,7 +90,7 @@ static int dsim_read_hl_data(struct lcd_info *lcd, u8 addr, u32 size, u8 *buf)
 	int retry = 4;
 	struct panel_private *priv = &lcd->dsim->priv;
 
-	if (priv->lcdConnected == PANEL_DISCONNEDTED)
+	if (!priv->lcdConnected)
 		return size;
 
 try_read:
@@ -179,7 +174,7 @@ static int s6d7aa0_read_init_info(struct lcd_info *lcd)
 	dev_info(&lcd->ld->dev, "MDD : %s was called\n", __func__);
 
 	if (lcdtype == 0) {
-		priv->lcdConnected = PANEL_DISCONNEDTED;
+		priv->lcdConnected = 0;
 		goto read_exit;
 	}
 
@@ -339,12 +334,10 @@ static int s6d7aa0_probe(struct dsim_device *dsim)
 	int ret = 0;
 	struct panel_private *priv = &dsim->priv;
 	struct lcd_info *lcd = dsim->priv.par;
-	struct device_node *np;
-	struct platform_device *pdev;
 
 	dev_info(&lcd->ld->dev, "%s: was called\n", __func__);
 
-	priv->lcdConnected = PANEL_CONNECTED;
+	priv->lcdConnected = 1;
 
 	lcd->bd->props.max_brightness = UI_MAX_BRIGHTNESS;
 	lcd->bd->props.brightness = UI_DEFAULT_BRIGHTNESS;
@@ -358,14 +351,10 @@ static int s6d7aa0_probe(struct dsim_device *dsim)
 	lcd->siop_enable = 0;
 
 	s6d7aa0_read_init_info(lcd);
-	if (priv->lcdConnected == PANEL_DISCONNEDTED) {
+	if (!priv->lcdConnected) {
 		dev_err(&lcd->ld->dev, "dsim : %s lcd was not connected\n", __func__);
 		goto exit;
 	}
-
-	np = of_find_node_with_property(NULL, "lcd_info");
-	np = of_parse_phandle(np, "lcd_info", 0);
-	pdev = of_platform_device_create(np, NULL, dsim->dev);
 
 	dev_info(&lcd->ld->dev, "%s: done\n", __func__);
 exit:

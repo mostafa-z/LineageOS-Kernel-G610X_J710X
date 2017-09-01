@@ -27,11 +27,6 @@
 #define POWER_IS_ON(pwr)			(pwr <= FB_BLANK_NORMAL)
 #define LEVEL_IS_HBM(brightness)		(brightness == EXTEND_BRIGHTNESS)
 
-struct i2c_client *tc358764_client;
-
-unsigned int			panel_power_gpio;
-unsigned int			panel_pwm_gpio;
-
 struct lcd_info {
 	unsigned int			bl;
 	unsigned int			brightness;
@@ -54,34 +49,20 @@ struct lcd_info {
 	struct mutex			lock;
 
 	struct pinctrl			*pins;
-	struct pinctrl_state		*pins_state[2];
-	struct pinctrl			*pins_pwm;
-	struct pinctrl_state		*pins_state_pwm[2];
+	struct pinctrl_state	*pins_state[2];
 
 	struct pwm_device		*pwm;
 	unsigned int			pwm_period;
 	unsigned int			pwm_min;
 	unsigned int			pwm_max;
 	unsigned int			pwm_outdoor;
+
+	struct i2c_client		*tc358764_client;
+	unsigned int			panel_power_gpio;
+	unsigned int			panel_pwm_gpio;
 };
 
-static int pwm_pinctrl_enable(struct lcd_info *lcd, int enable)
-{
-	struct device *dev = &lcd->ld->dev;
-	int ret = 0;
-
-	if (!IS_ERR_OR_NULL(lcd->pins_state_pwm[enable])) {
-		ret = pinctrl_select_state(lcd->pins_pwm, lcd->pins_state_pwm[enable]);
-		if (ret) {
-			dev_err(dev, "%s: pwm_pinctrl_select_state for %s\n", __func__, enable ? "on" : "off");
-			return ret;
-		}
-	}
-
-	return ret;
-}
-
-static int tc358764_array_write(u16 addr, u32 w_data)
+static int tc358764_array_write(struct lcd_info *lcd, u16 addr, u32 w_data)
 {
 	int ret = 0;
 	char buf[6] = {0, };
@@ -99,9 +80,9 @@ static int tc358764_array_write(u16 addr, u32 w_data)
 	buf[4] = (w_data >> 16) & 0xff;
 	buf[5] = (w_data >> 24) & 0xff;
 
-	ret = i2c_smbus_write_i2c_block_data(tc358764_client, buf[0], 5, &buf[1]);
+	ret = i2c_smbus_write_i2c_block_data(lcd->tc358764_client, buf[0], 5, &buf[1]);
 	if (ret < 0)
-		dsim_err("%s: error : setting fail : %d\n", __func__, ret);
+		dev_err(&lcd->ld->dev, "%s: fail. %d, %4x, %8x\n", __func__, ret, addr, w_data);
 
 	return 0;
 }
@@ -194,7 +175,7 @@ static int ltl101al06_exit(struct lcd_info *lcd)
 	dev_info(&lcd->ld->dev, "%s\n", __func__);
 
 	pwm_disable(lcd->pwm);
-	pwm_pinctrl_enable(lcd, 0);
+	pinctrl_enable(lcd, 0);
 
 	return ret;
 }
@@ -208,7 +189,7 @@ static int ltl101al06_displayon(struct lcd_info *lcd)
 	dsim_panel_set_brightness(lcd, 1);
 	pwm_enable(lcd->pwm);
 	msleep(200);
-	pwm_pinctrl_enable(lcd, 1);
+	pinctrl_enable(lcd, 1);
 
 	return ret;
 }
@@ -221,46 +202,46 @@ static int ltl101al06_init(struct lcd_info *lcd)
 
 //	msleep(300); //?? internal PLL boosting time...
 
-	ret = gpio_request_one(panel_power_gpio, GPIOF_OUT_INIT_HIGH, "BLIC_ON");
-	gpio_free(panel_power_gpio);
+	ret = gpio_request_one(lcd->panel_power_gpio, GPIOF_OUT_INIT_HIGH, "BLIC_ON");
+	gpio_free(lcd->panel_power_gpio);
 
 	//TC358764_65XBG_Tv12p_ParameterSetting_SS_1280x800_noMSF_SEC_151211.xls
 
 	//TC358764/65XBG DSI Basic Parameters.  Following 10 setting should be pefromed in LP mode
-	tc358764_array_write(0x013C,	0x00050006);
-	tc358764_array_write(0x0114,	0x00000004);
-	tc358764_array_write(0x0164,	0x00000004);
-	tc358764_array_write(0x0168,	0x00000004);
-	tc358764_array_write(0x016C,	0x00000004);
-	tc358764_array_write(0x0170,	0x00000004);
-	tc358764_array_write(0x0134,	0x0000001F);
-	tc358764_array_write(0x0210,	0x0000001F);
-	tc358764_array_write(0x0104,	0x00000001);
-	tc358764_array_write(0x0204,	0x00000001);
+	tc358764_array_write(lcd, 0x013C,	0x00050006);
+	tc358764_array_write(lcd, 0x0114,	0x00000004);
+	tc358764_array_write(lcd, 0x0164,	0x00000004);
+	tc358764_array_write(lcd, 0x0168,	0x00000004);
+	tc358764_array_write(lcd, 0x016C,	0x00000004);
+	tc358764_array_write(lcd, 0x0170,	0x00000004);
+	tc358764_array_write(lcd, 0x0134,	0x0000001F);
+	tc358764_array_write(lcd, 0x0210,	0x0000001F);
+	tc358764_array_write(lcd, 0x0104,	0x00000001);
+	tc358764_array_write(lcd, 0x0204,	0x00000001);
 
 	//TC358764/65XBG Timing and mode setting (LP or HS)
-	tc358764_array_write(0x0450,	0x03F00120);
-	tc358764_array_write(0x0454,    0x00580032);
-	tc358764_array_write(0x0458,    0x00590500);
-	tc358764_array_write(0x045C,	0x00420006);
-	tc358764_array_write(0x0460,	0x00440320);
-	tc358764_array_write(0x0464,	0x00000001);
-	tc358764_array_write(0x04A0,	0x00448006);
+	tc358764_array_write(lcd, 0x0450,	0x03F00120);
+	tc358764_array_write(lcd, 0x0454,    0x00580032);
+	tc358764_array_write(lcd, 0x0458,    0x00590500);
+	tc358764_array_write(lcd, 0x045C,	0x00420006);
+	tc358764_array_write(lcd, 0x0460,	0x00440320);
+	tc358764_array_write(lcd, 0x0464,	0x00000001);
+	tc358764_array_write(lcd, 0x04A0,	0x00448006);
 	usleep_range(1000, 1100);	//More than 100us
-	tc358764_array_write(0x04A0,	0x00048006);
-	tc358764_array_write(0x0504,	0x00000004);
+	tc358764_array_write(lcd, 0x04A0,	0x00048006);
+	tc358764_array_write(lcd, 0x0504,	0x00000004);
 
 	//TC358764/65XBG LVDS Color mapping setting (LP or HS)
-	tc358764_array_write(0x0480,	0x03020100);
-	tc358764_array_write(0x0484,	0x08050704);
-	tc358764_array_write(0x0488,	0x0F0E0A09);
-	tc358764_array_write(0x048C,	0x100D0C0B);
-	tc358764_array_write(0x0490,	0x12111716);
-	tc358764_array_write(0x0494,	0x1B151413);
-	tc358764_array_write(0x0498,	0x061A1918);
+	tc358764_array_write(lcd, 0x0480,	0x03020100);
+	tc358764_array_write(lcd, 0x0484,	0x08050704);
+	tc358764_array_write(lcd, 0x0488,	0x0F0E0A09);
+	tc358764_array_write(lcd, 0x048C,	0x100D0C0B);
+	tc358764_array_write(lcd, 0x0490,	0x12111716);
+	tc358764_array_write(lcd, 0x0494,	0x1B151413);
+	tc358764_array_write(lcd, 0x0498,	0x061A1918);
 
 	//TC358764/65XBG LVDS enable (LP or HS)
-	tc358764_array_write(0x049C,	0x00000001);
+	tc358764_array_write(lcd, 0x049C,	0x00000001);
 
 	return ret;
 }
@@ -268,19 +249,30 @@ static int ltl101al06_init(struct lcd_info *lcd)
 static int tc358764_probe(struct i2c_client *client,
 	const struct i2c_device_id *id)
 {
+	struct lcd_info *lcd = NULL;
 	int ret = 0;
 
-	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
-		pr_err("%s: fail.\n", __func__);
-		ret = -ENODEV;
-		goto err_i2c;
+	if (id && id->driver_data)
+		lcd = (struct lcd_info *)id->driver_data;
+
+	if (!lcd) {
+		dsim_err("%s: failed to find driver_data for lcd\n", __func__);
+		ret = -EINVAL;
+		goto exit;
 	}
 
-	tc358764_client = client;
-	panel_power_gpio = of_get_gpio(client->dev.of_node, 0);
-	panel_pwm_gpio = of_get_gpio(client->dev.of_node, 1);
+	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
+		dev_err(&lcd->ld->dev, "%s: need I2C_FUNC_I2C\n", __func__);
+		ret = -ENODEV;
+		goto exit;
+	}
 
-err_i2c:
+	i2c_set_clientdata(client, lcd);
+	lcd->tc358764_client = client;
+	lcd->panel_power_gpio = of_get_gpio(client->dev.of_node, 0);
+	lcd->panel_pwm_gpio = of_get_gpio(client->dev.of_node, 1);
+
+exit:
 	return ret;
 }
 
@@ -292,7 +284,7 @@ static struct i2c_device_id tc358764_id[] = {
 MODULE_DEVICE_TABLE(i2c, tc358764_id);
 
 static struct of_device_id tc358764_i2c_dt_ids[] = {
-	{ .compatible = "tc358764,i2c" },
+	{ .compatible = "i2c,tc358764" },
 	{ }
 };
 
@@ -317,7 +309,7 @@ static int pwm_probe(struct lcd_info *lcd, struct device_node *parent)
 	np = of_parse_phandle(parent, "pwm_info", 0);
 
 	if (!np) {
-		pr_err("%s: %s node does not exist!!!\n", __func__, "pwm_info");
+		dev_info(&lcd->ld->dev, "%s: %s node does not exist!!!\n", __func__, "pwm_info");
 		ret = -ENODEV;
 	}
 
@@ -353,7 +345,7 @@ static int ltl101al06_probe(struct dsim_device *dsim)
 
 	dev_info(&lcd->ld->dev, "%s: was called\n", __func__);
 
-	priv->lcdConnected = PANEL_CONNECTED;
+	priv->lcdConnected = 1;
 
 	lcd->bd->props.max_brightness = EXTEND_BRIGHTNESS;
 	lcd->bd->props.brightness = UI_DEFAULT_BRIGHTNESS;
@@ -368,7 +360,7 @@ static int ltl101al06_probe(struct dsim_device *dsim)
 	lcd->current_hbm = 0;
 
 	if (lcdtype == 0) {
-		priv->lcdConnected = PANEL_DISCONNEDTED;
+		priv->lcdConnected = 0;
 		dev_err(&lcd->ld->dev, "dsim : %s lcd was not connected\n", __func__);
 		goto exit;
 	}
@@ -377,25 +369,20 @@ static int ltl101al06_probe(struct dsim_device *dsim)
 	np = of_parse_phandle(np, "lcd_info", 0);
 	pdev = of_platform_device_create(np, NULL, dsim->dev);
 
-	lcd->pins_pwm = devm_pinctrl_get(&pdev->dev);
-	if (IS_ERR(lcd->pins_pwm)) {
+	lcd->pins = devm_pinctrl_get(&pdev->dev);
+	if (IS_ERR(lcd->pins)) {
 		pr_err("%s: devm_pinctrl_get fail\n", __func__);
 		goto exit;
 	}
 
-	lcd->pins_state_pwm[0] = pinctrl_lookup_state(lcd->pins_pwm, "pwm_off");
-	lcd->pins_state_pwm[1] = pinctrl_lookup_state(lcd->pins_pwm, "pwm_on");
-	if (IS_ERR_OR_NULL(lcd->pins_state_pwm[0]) || IS_ERR_OR_NULL(lcd->pins_state_pwm[1])) {
+	lcd->pins_state[0] = pinctrl_lookup_state(lcd->pins, "pwm_off");
+	lcd->pins_state[1] = pinctrl_lookup_state(lcd->pins, "pwm_on");
+	if (IS_ERR_OR_NULL(lcd->pins_state[0]) || IS_ERR_OR_NULL(lcd->pins_state[1])) {
 		pr_err("%s: pinctrl_lookup_state fail\n", __func__);
 		goto exit;
 	}
 
-	lcd->pins_pwm = devm_pinctrl_get(&pdev->dev);
-	if (IS_ERR(lcd->pins_pwm)) {
-		pr_err("%s: devm_pinctrl_get fail\n", __func__);
-		goto exit;
-	}
-
+	tc358764_id->driver_data = (kernel_ulong_t)lcd;
 	ret = i2c_add_driver(&tc358764_i2c_driver);
 	if (ret) {
 		pr_err("%s: add_i2c_driver fail.\n", __func__);
@@ -488,35 +475,14 @@ static ssize_t power_reduce_store(struct device *dev,
 	return size;
 }
 
-static ssize_t temperature_show(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	char temp[] = "-20, -19, 0, 1\n";
-
-	strcat(buf, temp);
-	return strlen(buf);
-}
-
-static ssize_t temperature_store(struct device *dev,
-	struct device_attribute *attr, const char *buf, size_t size)
-{
-	int value, rc = 0;
-
-	rc = kstrtoint(buf, 10, &value);
-
-	return size;
-}
-
 static DEVICE_ATTR(lcd_type, 0444, lcd_type_show, NULL);
 static DEVICE_ATTR(siop_enable, 0664, siop_enable_show, siop_enable_store);
 static DEVICE_ATTR(power_reduce, 0664, power_reduce_show, power_reduce_store);
-static DEVICE_ATTR(temperature, 0664, temperature_show, temperature_store);
 
 static struct attribute *lcd_sysfs_attributes[] = {
 	&dev_attr_lcd_type.attr,
 	&dev_attr_siop_enable.attr,
 	&dev_attr_power_reduce.attr,
-	&dev_attr_temperature.attr,
 	NULL,
 };
 
@@ -606,8 +572,6 @@ displayon_err:
 
 	dev_info(&lcd->ld->dev, "-%s: %d\n", __func__, priv->lcdConnected);
 
-	pinctrl_enable(lcd, 1);
-
 	return ret;
 }
 
@@ -634,8 +598,6 @@ suspend_err:
 	mutex_lock(&lcd->lock);
 	lcd->state = PANEL_STATE_SUSPENED;
 	mutex_unlock(&lcd->lock);
-
-	pinctrl_enable(lcd, 0);
 
 	dev_info(&lcd->ld->dev, "-%s: %d\n", __func__, priv->lcdConnected);
 

@@ -257,6 +257,7 @@ int decon_reg_wait_linecnt_is_zero_timeout(u32 id, int dsi_idx,
 
 	if (!cnt) {
 		decon_err("wait timeout linecount is zero(%u)\n", linecnt);
+		DISP_SS_DUMP(DISP_DUMP_LINECNT_ZERO);
 		return -EBUSY;
 	}
 

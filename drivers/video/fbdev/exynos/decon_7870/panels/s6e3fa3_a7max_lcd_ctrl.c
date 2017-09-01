@@ -81,7 +81,7 @@ struct lcd_info {
 	unsigned int			current_acl;
 	unsigned int			current_bl;
 	union elvss_info		current_elvss;
-	union elvss_info		current_aor;
+	union aor_info			current_aor;
 	unsigned int			current_hbm;
 	unsigned int			state;
 
@@ -114,27 +114,8 @@ struct lcd_info {
 	struct dsim_device		*dsim;
 	struct mutex			lock;
 
-	struct pinctrl			*pins;
-	struct pinctrl_state		*pins_state[2];
-
 	struct hbm_interpolation_t	hitp;
 };
-
-static int pinctrl_enable(struct lcd_info *lcd, int enable)
-{
-	struct device *dev = &lcd->ld->dev;
-	int ret = 0;
-
-	if (!IS_ERR_OR_NULL(lcd->pins_state[enable])) {
-		ret = pinctrl_select_state(lcd->pins, lcd->pins_state[enable]);
-		if (ret) {
-			dev_err(dev, "%s: pinctrl_select_state for %s\n", __func__, enable ? "on" : "off");
-			return ret;
-		}
-	}
-
-	return ret;
-}
 
 static int dsim_write_hl_data(struct lcd_info *lcd, const u8 *cmd, u32 cmdSize)
 {
@@ -142,7 +123,7 @@ static int dsim_write_hl_data(struct lcd_info *lcd, const u8 *cmd, u32 cmdSize)
 	int retry;
 	struct panel_private *priv = &lcd->dsim->priv;
 
-	if (priv->lcdConnected == PANEL_DISCONNEDTED)
+	if (!priv->lcdConnected)
 		return cmdSize;
 
 	retry = 5;
@@ -171,7 +152,7 @@ static int dsim_read_hl_data(struct lcd_info *lcd, u8 addr, u32 size, u8 *buf)
 	int retry = 4;
 	struct panel_private *priv = &lcd->dsim->priv;
 
-	if (priv->lcdConnected == PANEL_DISCONNEDTED)
+	if (!priv->lcdConnected)
 		return size;
 
 try_read:
@@ -641,7 +622,7 @@ static int s6e3fa3_read_id(struct lcd_info *lcd)
 
 	ret = s6e3fa3_read_info(lcd, LDI_REG_ID, LDI_LEN_ID, lcd->id);
 	if (ret < 0) {
-		priv->lcdConnected = PANEL_DISCONNEDTED;
+		priv->lcdConnected = 0;
 		dev_err(&lcd->ld->dev, "%s: fail\n", __func__);
 		goto exit;
 	}
@@ -848,9 +829,6 @@ static void init_hbm_data(struct lcd_info *lcd, u8 *hbm_data)
 	tmp[4] = v255[CI_BLUE][0];
 	tmp[5] = v255[CI_BLUE][1];
 
-	for (i = 0; i < ARRAY_SIZE(tmp); i++)
-		smtd_dbg("%02dth value is %02x, %3d\n", i + 1, tmp[i], tmp[i]);
-
 	reorder_reg2gamma(tmp, hbm);
 
 	smtd_dbg("HBM_Gamma_Value\n");
@@ -889,7 +867,8 @@ static int init_hbm_gamma(struct lcd_info *lcd)
 			pgamma = &gamma[v*CI_MAX];
 
 			for (c = 0; c < CI_MAX; c++) {
-				t1 = pgamma_def[c] << 10;
+				t1 = pgamma_def[c];
+				t1 = t1 << 10;
 				t2 = pgamma_hbm[c] - pgamma_def[c];
 				pgamma[c] = (t1 + (t2 * ratio)) >> 10;
 			}
@@ -1006,9 +985,10 @@ static int s6e3fa3_read_init_info(struct lcd_info *lcd, unsigned char *mtp)
 	int ret = 0;
 	unsigned char elvss_data[LDI_LEN_ELVSS] = {0,};
 
+	ret |= s6e3fa3_read_id(lcd);
+
 	DSI_WRITE(SEQ_TEST_KEY_ON_F0, ARRAY_SIZE(SEQ_TEST_KEY_ON_F0));
 
-	ret |= s6e3fa3_read_id(lcd);
 	ret |= s6e3fa3_read_mtp(lcd, mtp);
 	ret |= s6e3fa3_read_coordinate(lcd);
 	ret |= s6e3fa3_read_chip_id(lcd);
@@ -1030,12 +1010,10 @@ static int s6e3fa3_probe(struct dsim_device *dsim)
 	struct panel_private *priv = &dsim->priv;
 	struct lcd_info *lcd = dsim->priv.par;
 	unsigned char mtp[LDI_LEN_MTP] = {0, };
-	struct device_node *np;
-	struct platform_device *pdev;
 
 	dev_info(&lcd->ld->dev, "%s: was called\n", __func__);
 
-	priv->lcdConnected = PANEL_CONNECTED;
+	priv->lcdConnected = 1;
 
 	lcd->bd->props.max_brightness = EXTEND_BRIGHTNESS;
 	lcd->bd->props.brightness = UI_DEFAULT_BRIGHTNESS;
@@ -1058,8 +1036,8 @@ static int s6e3fa3_probe(struct dsim_device *dsim)
 	lcd->tset_param = SEQ_TSET_SETTING;
 
 	ret = s6e3fa3_read_init_info(lcd, mtp);
-	if (priv->lcdConnected == PANEL_DISCONNEDTED) {
-		pr_err("%s: lcd was not connected\n", __func__);
+	if (!priv->lcdConnected) {
+		dev_err(&lcd->ld->dev, "%s: lcd was not connected\n", __func__);
 		goto exit;
 	}
 
@@ -1069,23 +1047,6 @@ static int s6e3fa3_probe(struct dsim_device *dsim)
 #endif
 
 	dsim_panel_set_brightness(lcd, 1);
-
-	np = of_find_node_with_property(NULL, "lcd_info");
-	np = of_parse_phandle(np, "lcd_info", 0);
-	pdev = of_platform_device_create(np, NULL, dsim->dev);
-
-	lcd->pins = devm_pinctrl_get(&pdev->dev);
-	if (IS_ERR(lcd->pins)) {
-		pr_err("%s: devm_pinctrl_get fail\n", __func__);
-		goto exit;
-	}
-
-	lcd->pins_state[0] = pinctrl_lookup_state(lcd->pins, "off");
-	lcd->pins_state[1] = pinctrl_lookup_state(lcd->pins, "on");
-	if (IS_ERR_OR_NULL(lcd->pins_state[0]) || IS_ERR_OR_NULL(lcd->pins_state[1])) {
-		pr_err("%s: pinctrl_lookup_state fail\n", __func__);
-		goto exit;
-	}
 
 	dev_info(&lcd->ld->dev, "%s: done\n", __func__);
 exit:
@@ -1460,7 +1421,9 @@ static ssize_t adaptive_control_store(struct device *dev,
 
 	if (lcd->adaptive_control != value) {
 		dev_info(&lcd->ld->dev, "%s: %d, %d\n", __func__, lcd->adaptive_control, value);
+		mutex_lock(&lcd->lock);
 		lcd->adaptive_control = value;
+		mutex_unlock(&lcd->lock);
 		if (lcd->state == PANEL_STATE_RESUMED)
 			dsim_panel_set_brightness(lcd, 1);
 	}
@@ -1686,8 +1649,6 @@ displayon_err:
 
 	dev_info(&lcd->ld->dev, "-%s: %d\n", __func__, priv->lcdConnected);
 
-	pinctrl_enable(lcd, 1);
-
 	return ret;
 }
 
@@ -1714,8 +1675,6 @@ suspend_err:
 	mutex_lock(&lcd->lock);
 	lcd->state = PANEL_STATE_SUSPENED;
 	mutex_unlock(&lcd->lock);
-
-	pinctrl_enable(lcd, 0);
 
 	dev_info(&lcd->ld->dev, "-%s: %d\n", __func__, priv->lcdConnected);
 
