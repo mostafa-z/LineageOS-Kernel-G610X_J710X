@@ -70,12 +70,12 @@
 #define DEFAULT_IDLE_THRESHOLD 20
 
 #define DEFAULT_FREQ_CALC_DIVISION 100
-#define DEFAULT_FREQ_TARGET_A 757000
-#define DEFAULT_FREQ_TARGET_B 1014000
-#define DEFAULT_FREQ_TARGET_C 1352000
-#define DEFAULT_CPU_LOAD_A 25
-#define DEFAULT_CPU_LOAD_B 50
-#define DEFAULT_CPU_LOAD_C 75
+#define DEFAULT_FREQ_TARGET_LOW 757000
+#define DEFAULT_FREQ_TARGET_MID 1014000
+#define DEFAULT_FREQ_TARGET_HIG 1352000
+#define DEFAULT_CPU_LOAD_LOW 25
+#define DEFAULT_CPU_LOAD_MID 50
+#define DEFAULT_CPU_LOAD_HIG 75
 
 struct cpufreq_gabriel_cpuinfo {
 	struct timer_list cpu_timer;
@@ -140,12 +140,12 @@ struct cpufreq_gabriel_tunables {
 	unsigned int *policy;
 	bool freq_target_enable;
 	unsigned long freq_calc_division;
-	unsigned int freq_target_a;
-	unsigned int freq_target_b;
-	unsigned int freq_target_c;
-	unsigned long cpu_load_a;
-	unsigned long cpu_load_b;
-	unsigned long cpu_load_c;
+	unsigned int freq_target_low;
+	unsigned int freq_target_mid;
+	unsigned int freq_target_hig;
+	unsigned long cpu_load_low;
+	unsigned long cpu_load_mid;
+	unsigned long cpu_load_hig;
 };
 
 /* For cases where we have single governor instance for system */
@@ -417,17 +417,17 @@ static void cpufreq_gabriel_timer(unsigned long data)
 	if (cpu_load <= tunables->idle_threshold)
 		new_freq = pcpu->policy->cpuinfo.min_freq;
 
-	if (new_freq > tunables->freq_target_c
-		&& cpu_load >= tunables->cpu_load_c)
-			new_freq = tunables->freq_target_c;
-	else if (new_freq > tunables->freq_target_b
-		&& cpu_load >= tunables->cpu_load_b
-		&& cpu_load < tunables->cpu_load_c)
-			new_freq = tunables->freq_target_b;
-	else if (new_freq > tunables->freq_target_a
-		&& cpu_load >= tunables->cpu_load_a
-		&& cpu_load < tunables->cpu_load_b)
-			new_freq = tunables->freq_target_a;
+	if (new_freq > tunables->freq_target_hig
+		&& cpu_load >= tunables->cpu_load_hig)
+			new_freq = tunables->freq_target_hig;
+	else if (new_freq > tunables->freq_target_mid
+		&& cpu_load >= tunables->cpu_load_mid
+		&& cpu_load < tunables->cpu_load_hig)
+			new_freq = tunables->freq_target_mid;
+	else if (new_freq > tunables->freq_target_low
+		&& cpu_load >= tunables->cpu_load_low
+		&& cpu_load < tunables->cpu_load_mid)
+			new_freq = tunables->freq_target_low;
 
 	if (cpufreq_frequency_table_target(pcpu->policy, pcpu->freq_table,
 					   new_freq, CPUFREQ_RELATION_L,
@@ -865,13 +865,13 @@ static ssize_t store_freq_calc_division(struct cpufreq_gabriel_tunables
 	return count;
 }
 
-static ssize_t show_freq_target_a(struct cpufreq_gabriel_tunables *tunables,
+static ssize_t show_freq_target_low(struct cpufreq_gabriel_tunables *tunables,
 		char *buf)
 {
-	return sprintf(buf, "%u\n", tunables->freq_target_a);
+	return sprintf(buf, "%u\n", tunables->freq_target_low);
 }
 
-static ssize_t store_freq_target_a(struct cpufreq_gabriel_tunables *tunables,
+static ssize_t store_freq_target_low(struct cpufreq_gabriel_tunables *tunables,
 		const char *buf, size_t count)
 {
 	int ret;
@@ -880,17 +880,17 @@ static ssize_t store_freq_target_a(struct cpufreq_gabriel_tunables *tunables,
 	ret = kstrtoul(buf, 0, &val);
 	if (ret < 0)
 		return ret;
-	tunables->freq_target_a = val;
+	tunables->freq_target_low = val;
 	return count;
 }
 
-static ssize_t show_freq_target_b(struct cpufreq_gabriel_tunables *tunables,
+static ssize_t show_freq_target_mid(struct cpufreq_gabriel_tunables *tunables,
 		char *buf)
 {
-	return sprintf(buf, "%u\n", tunables->freq_target_b);
+	return sprintf(buf, "%u\n", tunables->freq_target_mid);
 }
 
-static ssize_t store_freq_target_b(struct cpufreq_gabriel_tunables *tunables,
+static ssize_t store_freq_target_mid(struct cpufreq_gabriel_tunables *tunables,
 		const char *buf, size_t count)
 {
 	int ret;
@@ -899,17 +899,17 @@ static ssize_t store_freq_target_b(struct cpufreq_gabriel_tunables *tunables,
 	ret = kstrtoul(buf, 0, &val);
 	if (ret < 0)
 		return ret;
-	tunables->freq_target_b = val;
+	tunables->freq_target_mid = val;
 	return count;
 }
 
-static ssize_t show_freq_target_c(struct cpufreq_gabriel_tunables *tunables,
+static ssize_t show_freq_target_hig(struct cpufreq_gabriel_tunables *tunables,
 		char *buf)
 {
-	return sprintf(buf, "%u\n", tunables->freq_target_c);
+	return sprintf(buf, "%u\n", tunables->freq_target_hig);
 }
 
-static ssize_t store_freq_target_c(struct cpufreq_gabriel_tunables *tunables,
+static ssize_t store_freq_target_hig(struct cpufreq_gabriel_tunables *tunables,
 		const char *buf, size_t count)
 {
 	int ret;
@@ -918,17 +918,17 @@ static ssize_t store_freq_target_c(struct cpufreq_gabriel_tunables *tunables,
 	ret = kstrtoul(buf, 0, &val);
 	if (ret < 0)
 		return ret;
-	tunables->freq_target_c = val;
+	tunables->freq_target_hig = val;
 	return count;
 }
 
-static ssize_t show_cpu_load_a(struct cpufreq_gabriel_tunables
+static ssize_t show_cpu_load_low(struct cpufreq_gabriel_tunables
 		*tunables, char *buf)
 {
-	return sprintf(buf, "%lu\n", tunables->cpu_load_a);
+	return sprintf(buf, "%lu\n", tunables->cpu_load_low);
 }
 
-static ssize_t store_cpu_load_a(struct cpufreq_gabriel_tunables
+static ssize_t store_cpu_load_low(struct cpufreq_gabriel_tunables
 		*tunables, const char *buf, size_t count)
 {
 	int ret;
@@ -937,17 +937,17 @@ static ssize_t store_cpu_load_a(struct cpufreq_gabriel_tunables
 	ret = kstrtoul(buf, 0, &val);
 	if (ret < 0)
 		return ret;
-	tunables->cpu_load_a = val;
+	tunables->cpu_load_low = val;
 	return count;
 }
 
-static ssize_t show_cpu_load_b(struct cpufreq_gabriel_tunables
+static ssize_t show_cpu_load_mid(struct cpufreq_gabriel_tunables
 		*tunables, char *buf)
 {
-	return sprintf(buf, "%lu\n", tunables->cpu_load_b);
+	return sprintf(buf, "%lu\n", tunables->cpu_load_mid);
 }
 
-static ssize_t store_cpu_load_b(struct cpufreq_gabriel_tunables
+static ssize_t store_cpu_load_mid(struct cpufreq_gabriel_tunables
 		*tunables, const char *buf, size_t count)
 {
 	int ret;
@@ -956,17 +956,17 @@ static ssize_t store_cpu_load_b(struct cpufreq_gabriel_tunables
 	ret = kstrtoul(buf, 0, &val);
 	if (ret < 0)
 		return ret;
-	tunables->cpu_load_b = val;
+	tunables->cpu_load_mid = val;
 	return count;
 }
 
-static ssize_t show_cpu_load_c(struct cpufreq_gabriel_tunables
+static ssize_t show_cpu_load_hig(struct cpufreq_gabriel_tunables
 		*tunables, char *buf)
 {
-	return sprintf(buf, "%lu\n", tunables->cpu_load_c);
+	return sprintf(buf, "%lu\n", tunables->cpu_load_hig);
 }
 
-static ssize_t store_cpu_load_c(struct cpufreq_gabriel_tunables
+static ssize_t store_cpu_load_hig(struct cpufreq_gabriel_tunables
 		*tunables, const char *buf, size_t count)
 {
 	int ret;
@@ -975,7 +975,7 @@ static ssize_t store_cpu_load_c(struct cpufreq_gabriel_tunables
 	ret = kstrtoul(buf, 0, &val);
 	if (ret < 0)
 		return ret;
-	tunables->cpu_load_c = val;
+	tunables->cpu_load_hig = val;
 	return count;
 }
 
@@ -1221,12 +1221,12 @@ show_store_gov_pol_sys(align_windows);
 show_store_gov_pol_sys(max_freq_hysteresis);
 show_store_gov_pol_sys(freq_target_enable);
 show_store_gov_pol_sys(freq_calc_division);
-show_store_gov_pol_sys(freq_target_a);
-show_store_gov_pol_sys(freq_target_b);
-show_store_gov_pol_sys(freq_target_c);
-show_store_gov_pol_sys(cpu_load_a);
-show_store_gov_pol_sys(cpu_load_b);
-show_store_gov_pol_sys(cpu_load_c);
+show_store_gov_pol_sys(freq_target_low);
+show_store_gov_pol_sys(freq_target_mid);
+show_store_gov_pol_sys(freq_target_hig);
+show_store_gov_pol_sys(cpu_load_low);
+show_store_gov_pol_sys(cpu_load_mid);
+show_store_gov_pol_sys(cpu_load_hig);
 
 #define gov_sys_attr_rw(_name)						\
 static struct global_attr _name##_gov_sys =				\
@@ -1254,12 +1254,12 @@ gov_sys_pol_attr_rw(align_windows);
 gov_sys_pol_attr_rw(max_freq_hysteresis);
 gov_sys_pol_attr_rw(freq_target_enable);
 gov_sys_pol_attr_rw(freq_calc_division);
-gov_sys_pol_attr_rw(freq_target_a);
-gov_sys_pol_attr_rw(freq_target_b);
-gov_sys_pol_attr_rw(freq_target_c);
-gov_sys_pol_attr_rw(cpu_load_a);
-gov_sys_pol_attr_rw(cpu_load_b);
-gov_sys_pol_attr_rw(cpu_load_c);
+gov_sys_pol_attr_rw(freq_target_low);
+gov_sys_pol_attr_rw(freq_target_mid);
+gov_sys_pol_attr_rw(freq_target_hig);
+gov_sys_pol_attr_rw(cpu_load_low);
+gov_sys_pol_attr_rw(cpu_load_mid);
+gov_sys_pol_attr_rw(cpu_load_hig);
 
 /* One Governor instance for entire system */
 static struct attribute *gabriel_attributes_gov_sys[] = {
@@ -1277,12 +1277,12 @@ static struct attribute *gabriel_attributes_gov_sys[] = {
 	&max_freq_hysteresis_gov_sys.attr,
 	&freq_target_enable_gov_sys.attr,
 	&freq_calc_division_gov_sys.attr,
-	&freq_target_a_gov_sys.attr,
-	&freq_target_b_gov_sys.attr,
-	&freq_target_c_gov_sys.attr,
-	&cpu_load_a_gov_sys.attr,
-	&cpu_load_b_gov_sys.attr,
-	&cpu_load_c_gov_sys.attr,
+	&freq_target_low_gov_sys.attr,
+	&freq_target_mid_gov_sys.attr,
+	&freq_target_hig_gov_sys.attr,
+	&cpu_load_low_gov_sys.attr,
+	&cpu_load_mid_gov_sys.attr,
+	&cpu_load_hig_gov_sys.attr,
 	NULL,
 };
 
@@ -1307,12 +1307,12 @@ static struct attribute *gabriel_attributes_gov_pol[] = {
 	&max_freq_hysteresis_gov_pol.attr,
 	&freq_target_enable_gov_pol.attr,
 	&freq_calc_division_gov_pol.attr,
-	&freq_target_a_gov_pol.attr,
-	&freq_target_b_gov_pol.attr,
-	&freq_target_c_gov_pol.attr,
-	&cpu_load_a_gov_pol.attr,
-	&cpu_load_b_gov_pol.attr,
-	&cpu_load_c_gov_pol.attr,
+	&freq_target_low_gov_pol.attr,
+	&freq_target_mid_gov_pol.attr,
+	&freq_target_hig_gov_pol.attr,
+	&cpu_load_low_gov_pol.attr,
+	&cpu_load_mid_gov_pol.attr,
+	&cpu_load_hig_gov_pol.attr,
 	NULL,
 };
 
@@ -1391,12 +1391,12 @@ static int cpufreq_governor_gabriel(struct cpufreq_policy *policy,
 			tunables->idle_threshold= DEFAULT_IDLE_THRESHOLD;
 			tunables->timer_slack_val = DEFAULT_TIMER_SLACK;
 			tunables->freq_calc_division = DEFAULT_FREQ_CALC_DIVISION;
-			tunables->freq_target_a = DEFAULT_FREQ_TARGET_A;
-			tunables->freq_target_b = DEFAULT_FREQ_TARGET_B;
-			tunables->freq_target_c = DEFAULT_FREQ_TARGET_C;
-			tunables->cpu_load_a = DEFAULT_CPU_LOAD_A;
-			tunables->cpu_load_b = DEFAULT_CPU_LOAD_B;
-			tunables->cpu_load_c = DEFAULT_CPU_LOAD_C;
+			tunables->freq_target_low = DEFAULT_FREQ_TARGET_LOW;
+			tunables->freq_target_mid = DEFAULT_FREQ_TARGET_MID;
+			tunables->freq_target_hig = DEFAULT_FREQ_TARGET_HIG;
+			tunables->cpu_load_low = DEFAULT_CPU_LOAD_LOW;
+			tunables->cpu_load_mid = DEFAULT_CPU_LOAD_MID;
+			tunables->cpu_load_hig = DEFAULT_CPU_LOAD_HIG;
 		} else {
 			memcpy(tunables, tuned_parameters[policy->cpu], sizeof(*tunables));
 			kfree(tuned_parameters[policy->cpu]);
