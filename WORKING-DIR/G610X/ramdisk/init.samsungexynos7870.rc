@@ -602,27 +602,12 @@ on fs
     chown system system /sys/class/backlight/panel/brightness
 
 # Permissions for LCD
-    chown system radio /sys/class/lcd/panel/manufacture_code
     chown system radio /sys/class/lcd/panel/lcd_type
-    chown system system /sys/class/lcd/panel/siop_enable
-    chown system system /sys/class/lcd/panel/temperature
-    chown system radio /sys/class/lcd/panel/power_reduce
     chown system system /sys/class/lcd/panel/lux
-    chown system media_rw /sys/class/lcd/panel/adaptive_control
-    chown system system /sys/class/lcd/panel/alpm
-    chown system system /sys/class/lcd/panel/dpui
-    chown system system /sys/class/lcd/panel/dpui_dbg
-    chown system system /sys/devices/svc/OCTA/SVC_OCTA
 
 # Permissions for MDNIE
     chown system media_rw /sys/class/mdnie/mdnie/mode
     chown system media_rw /sys/class/mdnie/mdnie/scenario
-    chown system system /sys/class/mdnie/mdnie/accessibility
-    chown system system /sys/class/mdnie/mdnie/auto_brightness
-    chown system system /sys/class/mdnie/mdnie/sensorRGB
-    chown system system /sys/class/mdnie/mdnie/mdnie_ldu
-    chown system system /sys/class/mdnie/mdnie/night_mode
-    chown system system /sys/class/mdnie/mdnie/whiteRGB
 
 # For cpefs partition
     check_fs /dev/block/platform/13540000.dwmmc0/by-name/CPEFS ext4
@@ -642,6 +627,7 @@ on fs
     chmod 0755 /persdata
     chown system system /persdata/absolute
     chmod 0750 /persdata/absolute
+
 
 # Copy DRM Key
     copy /system/app/wv.keys /factory/wv.keys
@@ -732,7 +718,7 @@ service argos-daemon /system/bin/argosd
 
 # LPM
 on property:ro.bootmode=charger
-   mount ext4 /dev/block/platform/13540000.dwmmc0/by-name/SYSTEM /system wait rw
+   mount ext4 /dev/block/platform/13540000.dwmmc0/by-name/SYSTEM /system wait ro
 
 on property:ro.bootmode=charger
     wait /dev/block/platform/13540000.dwmmc0/by-name/EFS
