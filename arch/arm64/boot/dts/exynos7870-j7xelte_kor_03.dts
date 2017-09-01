@@ -384,7 +384,6 @@
 					<&but_zones 115 291 488>, /* vol up */
 					<&but_zones 114 489 1000>; /* vol down */
 			mic-adc-range = <1350>;
-			mic-det-delay = <50>;			
 		};
 	};
 
