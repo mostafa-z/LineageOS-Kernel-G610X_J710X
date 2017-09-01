@@ -110,15 +110,15 @@
 		battery,input_current_limit = <1550 460 460 1550 460 900 1000 460 1000 0 820 820 820 1900 1550 0 0 400 700 1300 300 1000 1550 0 1667 1667 1000 1667 80 1800 1667 1400 1000 1000 820 820>;
 		battery,fast_charging_current = <1800 0 0 1800 460 1200 1000 460 1200 0 1200 1200 1200 1700 2100 0 0 400 700 1300 300 1000 1500 0 2550 2550 1000 2550 80 1800 1000 1400 0 1000 1200 1200>;
 		battery,full_check_current_1st = <325 0 0 325 325 325 325 325 325 0 325 325 325 325 325 0 0 325 325 325 325 325 325 0 325 325 325 325 0 325 325 325 0 325 325 325>;
-		battery,full_check_current_2nd = <100 0 0 100 100 100 100 100 100 0 100 100 100 100 100 0 0 100 100 100 100 100 100 0 100 100 100 100 0 100 100 100 0 100 100 100>;
+		battery,full_check_current_2nd = <175 0 0 175 175 175 175 175 175 0 175 175 175 175 175 0 0 175 175 175 175 175 175 0 175 175 175 175 0 175 175 175 0 175 175 175>;
 
 		battery,wireless_cc_cv = <86>;
 		battery,inbat_voltage = <1>;
 
-		battery,inbat_voltage_table_adc = <2850 2834 2806 2779 2751 2724 2696 2669 2642 2614 
-						2587 2559 2532 2505 2477 2450 2422 2395 2367 2340 2313 448>;
-		battery,inbat_voltage_table_data = <438 435 430 425 420 415 410 405 400 395
-						390 385 380 375 370 365 360 355 350 345 340 1>;
+		battery,inbat_voltage_table_adc = <2847 2829 2802 2770 2743 2715 2688 2664 2634 2603 
+						2573 2544 2515 2485 2456 2431 2406 2377 2347 2317 2289 448>;
+		battery,inbat_voltage_table_data = <4380 4350 4300 4250 4200 4150 4100 4050 4000 3950
+						3900 3850 3800 3750 3700 3650 3600 3550 3500 3450 3400 1>;
 
 		battery,adc_check_count = <5>;
 
@@ -141,16 +141,16 @@
 		battery,temp_check_count = <1>;
 		battery,temp_highlimit_threshold_normal = <800>;
 		battery,temp_highlimit_recovery_normal = <750>;
-		battery,temp_high_threshold_normal = <550>;
-		battery,temp_high_recovery_normal = <500>;
-		battery,temp_low_threshold_normal = <(-50)>;
-		battery,temp_low_recovery_normal = <0>;
+		battery,temp_high_threshold_normal = <500>;
+		battery,temp_high_recovery_normal = <450>;
+		battery,temp_low_threshold_normal = <0>;
+		battery,temp_low_recovery_normal = <50>;
 		battery,temp_highlimit_threshold_lpm = <800>;
 		battery,temp_highlimit_recovery_lpm = <750>;
-		battery,temp_high_threshold_lpm = <550>;
-		battery,temp_high_recovery_lpm = <500>;
-		battery,temp_low_threshold_lpm = <(-50)>;
-		battery,temp_low_recovery_lpm = <0>;
+		battery,temp_high_threshold_lpm = <500>;
+		battery,temp_high_recovery_lpm = <450>;
+		battery,temp_low_threshold_lpm = <0>;
+		battery,temp_low_recovery_lpm = <50>;
 
 		battery,full_check_type = <2>; /* SEC_BATTERY_FULLCHARGED_FG_CURRENT */
 		battery,full_check_type_2nd = <2>; /* SEC_BATTERY_FULLCHARGED_FG_CURRENT */
@@ -168,13 +168,17 @@
 		battery,recharge_check_count = <2>;
 		battery,recharge_condition_type = <4>; /* SEC_BATTERY_RECHARGE_CONDITION_VCELL */
 		battery,recharge_condition_soc = <98>;
-		battery,recharge_condition_vcell = <4330>;
+		battery,recharge_condition_vcell = <4280>;
+
+		battery,expired_time = <15000>;
+		battery,recharging_expired_time = <5400>;
+		battery,standard_curr = <1800>;
 
 		battery,charging_total_time = <21600>;
 		battery,recharging_total_time = <5400>;
 		battery,charging_reset_time = <0>;
 
-		battery,chg_float_voltage = <4380>;
+		battery,chg_float_voltage = <4350>;
 
 		battery,self_discharging_en;
 		battery,force_discharging_limit = <650>;
@@ -189,20 +193,24 @@
 		battery,self_discharging_temp_recov = <550>;
 		battery,self_discharging_temp_pollingtime = <400>;
 
-		battery,swelling_high_temp_block = <450>;
-		battery,swelling_high_temp_recov = <400>;
-		battery,swelling_low_temp_block = <100>;
-		battery,swelling_low_temp_recov = <150>;
-		battery,swelling_low_temp_additional = <50>;
-		battery,swelling_low_temp_additional_current = <650>;	/* 0.2C */
-		battery,swelling_low_temp_current = <1650>;	/* 0.5C */
+		battery,swelling_high_temp_block = <410>;
+		battery,swelling_high_temp_recov = <390>;
+		
+		battery,swelling_low_temp_2step_mode = <1>;
+		battery,swelling_low_temp_block_1st = <150>;
+		battery,swelling_low_temp_recov_1st = <200>;
+		battery,swelling_low_temp_block_2nd = <50>;
+		battery,swelling_low_temp_recov_2nd = <100>;
+		
+		battery,swelling_low_temp_current = <750>;	/* 0.5C */
 		battery,swelling_low_temp_topoff = <175>;	/* 0.05C */
-		battery,swelling_high_temp_current = <1800>;	/* 0.7C */
+		battery,swelling_high_temp_current = <1150>;	/* 0.7C */
 		battery,swelling_high_temp_topoff = <175>;	/* 0.05C */
-		battery,swelling_drop_float_voltage = <4200>;
+		
+		battery,swelling_drop_float_voltage = <4150>;
 		battery,swelling_offset_voltage = <20>;
-		battery,swelling_high_rechg_voltage = <4150>;
-		battery,swelling_low_rechg_voltage = <4050>;
+		battery,swelling_high_rechg_voltage = <4000>;
+		battery,swelling_low_rechg_voltage = <4000>;
 
 		battery,siop_input_limit_current = <1550>;
 		battery,siop_charging_limit_current = <1000>;

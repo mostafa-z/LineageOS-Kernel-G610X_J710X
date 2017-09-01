@@ -96,7 +96,8 @@
 		pinctrl-0 = <&i2s_pmic_bus
 				&i2s_bt_bus>;
 		pinctrl-1 = <&i2s_pmic_bus_idle
-				&i2s_bt_bus_idle> ;
+				&i2s_bt_bus_idle>;
+		bt-fm-combo;
 		bck-mcko-mode;
 		status = "okay";
 	};
@@ -545,6 +546,7 @@
 			&audio_codec_cod3026x>;
 		mic-bias-mode = <1 1 2 0>;
 		samsung,auxdev = <&s1402x>;
+		fm-slave-i2s;
 		status = "okay";
 	};
 
@@ -1315,7 +1317,7 @@
 		status = "okay";
 	};
 
-	i2c@35 {
+	isl98611 {
 		compatible = "i2c-gpio";
 		gpios = <&gpc9 0 0
 			&gpc9 1 0>;
@@ -1324,8 +1326,8 @@
 		#size-cells = <0>;
 		status = "okay";
 
-		isl98611@35 {
-			compatible = "isl98611,i2c";
+		isl98611@29 {
+			compatible = "i2c,isl98611";
 			reg = <0x29>;
 		};
 	};
@@ -1344,6 +1346,7 @@
 		lcd_info = <&td4300_fhd>;
 		decon_board = <&decon_board_list>;
 		status = "okay";
+		enable_early_gpio = <&gpa0 7 0x00>, <&gpa1 7 0xf>, <&gpa0 0 0xf>;	/* FINGER, HOME, POWER */
 	};
 
 	decon_board_list: decon_board_list {
@@ -1364,16 +1367,26 @@
 			regulator = "LCD_1P8";
 		};
 		dsim_reset_panel {
-			type = "gpio,high", "delay,usleep", "gpio,low", "delay,usleep", "gpio,high";
+			type = "gpio,high", "delay,usleep", "gpio,low", "delay,usleep", "gpio,high", "timer,start,reset";
 			gpios = <&gpd3 4 0x1>, <&gpd3 4 0x1>, <&gpd3 4 0x1>;
-			delay = <1000 2000>, <1000 2000>;
+			delay = <1000 2000>, <1000 2000>, <130>;
+		};
+		dsim_reset_panel_wait {
+			type = "timer,delay,reset";
+		};
+		td4300_init {
+			type = "timer,start,sleep_out";
+			delay = <100>;
+		};
+		td4300_displayon_late {
+			type = "timer,delay,sleep_out";
 		};
 	};
 
 	td4300_fhd: td4300_fhd {
 		mode = <0>;
 		resolution = <1080 1920>;
-		size = <63 111>;
+		size = <68 121>;
 		ddi_type = <0>;
 		timing,refresh = <60>;
 		/* HBP HFP HSW */
