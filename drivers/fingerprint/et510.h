@@ -204,10 +204,6 @@ struct etspi_data {
 	/* for use auto cs mode with dualization fp sensor */
 	unsigned int cs_gpio;
 #endif
-	struct pinctrl *p;
-	struct pinctrl_state *pins_poweron;
-	struct pinctrl_state *pins_poweroff;
-	unsigned int ldocontrol;
 #endif
 	unsigned int spi_cs;	/* spi cs pin <temporary gpio setting> */
 

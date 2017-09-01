@@ -41,11 +41,6 @@
 #endif
 #include <linux/sysfs.h>
 
-#ifndef ENABLE_SENSORS_FPRINT_SECURE
-#include <linux/pinctrl/consumer.h>
-#include "../pinctrl/core.h"
-#endif
-
 static DECLARE_BITMAP(minors, N_SPI_MINORS);
 
 static LIST_HEAD(device_list);
@@ -169,42 +164,11 @@ static void etspi_reset(struct etspi_data *etspi)
 	usleep_range(1050, 1100);
 	gpio_set_value(etspi->sleepPin, 1);
 }
-#ifndef ENABLE_SENSORS_FPRINT_SECURE
-static void etspi_pin_control(struct etspi_data *etspi,
-	bool pin_set)
-{
-	int status = 0;
-	if(etspi->ldocontrol){
-		etspi->p->state = NULL;
-		if (pin_set) {
-			if (!IS_ERR(etspi->pins_poweron)) {
-				status = pinctrl_select_state(etspi->p,
-					etspi->pins_poweron);
-				if (status)
-					pr_err("%s: can't set pin default state\n",
-						__func__);
-				pr_info("%s idle\n", __func__);
-			}
-		} else {
-			if (!IS_ERR(etspi->pins_poweroff)) {
-				status = pinctrl_select_state(etspi->p,
-					etspi->pins_poweroff);
-				if (status)
-					pr_err("%s: can't set pin sleep state\n",
-						__func__);
-				pr_info("%s sleep\n", __func__);
-			}
-		}
-	}
-}
-#endif
+
 static void etspi_power_control(struct etspi_data *etspi, int status)
 {
 	pr_info("%s status = %d\n", __func__, status);
 	if (status == 1) {
-#ifndef ENABLE_SENSORS_FPRINT_SECURE
-		etspi_pin_control(etspi,1);
-#endif
 		if (etspi->ldo_pin)
 			gpio_set_value(etspi->ldo_pin, 1);
 		usleep_range(50, 100);
@@ -220,9 +184,6 @@ static void etspi_power_control(struct etspi_data *etspi, int status)
 			gpio_set_value(etspi->sleepPin, 0);
 		if (etspi->ldo_pin)
 			gpio_set_value(etspi->ldo_pin, 0);
-#ifndef ENABLE_SENSORS_FPRINT_SECURE
-		etspi_pin_control(etspi,0);
-#endif
 	} else {
 		pr_err("%s can't support this value. %d\n", __func__, status);
 	}
@@ -268,9 +229,9 @@ static int etspi_sec_spi_prepare(struct sec_spi_info *spi_info,
 		return PTR_ERR(fp_spi_sclk);
 	}
 #if defined(CONFIG_SOC_EXYNOS7870) || defined(CONFIG_SOC_EXYNOS7880)
-	fp_spi_dma = clk_get(NULL, "apb_pclk");
+	fp_spi_dma = clk_get(NULL, "fp-spi-dma");
 	if (IS_ERR(fp_spi_dma)) {
-		pr_err("%s Can't get apb_pclk\n", __func__);
+		pr_err("%s Can't get fp-spi-dma\n", __func__);
 		return PTR_ERR(fp_spi_dma);
 	}
 #endif
@@ -313,9 +274,9 @@ static int etspi_sec_spi_unprepare(struct sec_spi_info *spi_info,
 		return PTR_ERR(fp_spi_sclk);
 	}
 #if defined(CONFIG_SOC_EXYNOS7870) || defined(CONFIG_SOC_EXYNOS7880)
-	fp_spi_dma = clk_get(NULL, "apb_pclk");
+	fp_spi_dma = clk_get(NULL, "fp-spi-dma");
 	if (IS_ERR(fp_spi_dma)) {
-		pr_err("%s Can't get apb_pclk\n", __func__);
+		pr_err("%s Can't get fp-spi-dma\n", __func__);
 		return PTR_ERR(fp_spi_dma);
 	}
 #endif
@@ -1063,43 +1024,9 @@ static int etspi_parse_dt(struct device *dev,
 		pr_info("%s: ldo_pin=%d\n",
 			__func__, data->ldo_pin);
 	}
-#ifndef ENABLE_SENSORS_FPRINT_SECURE
 
-	if (of_property_read_u32(np, "etspi-ldocontrol",
-			&data->ldocontrol))
-			data->ldocontrol = 0;
-	
-	pr_info("%s: ldocontrol=%d\n",
-		__func__, data->ldocontrol);
-	if(data->ldocontrol){
-		data->p = pinctrl_get_select_default(dev);
-		if (IS_ERR(data->p)) {
-			errorno = -EINVAL;
-			pr_err("%s: failed pinctrl_get\n", __func__);
-			goto dt_exit;
-		}
-	
-		data->pins_poweroff = pinctrl_lookup_state(data->p, "pins_poweroff");
-		if(IS_ERR(data->pins_poweroff)) {
-			pr_err("%s : could not get pins sleep_state (%li)\n",
-				__func__, PTR_ERR(data->pins_poweroff));
-			goto fail_pinctrl_get;
-		}
-	
-		data->pins_poweron = pinctrl_lookup_state(data->p, "pins_poweron");
-		if(IS_ERR(data->pins_poweron)) {
-			pr_err("%s : could not get pins idle_state (%li)\n",
-				__func__, PTR_ERR(data->pins_poweron));
-			goto fail_pinctrl_get;
-		}
-	}
-#endif
 	pr_info("%s is successful\n", __func__);
 	return errorno;
-#ifndef ENABLE_SENSORS_FPRINT_SECURE
-fail_pinctrl_get:
-		pinctrl_put(data->p);
-#endif
 dt_exit:
 	pr_err("%s is failed\n", __func__);
 	return errorno;
@@ -1178,28 +1105,6 @@ static ssize_t etspi_adm_show(struct device *dev,
 {
 	return snprintf(buf, PAGE_SIZE, "%d\n", DETECT_ADM);
 }
-#ifndef ENABLE_SENSORS_FPRINT_SECURE
-static ssize_t etspi_sysfs_power_on_show(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	if(g_data->ldocontrol){
-		etspi_power_control(g_data, 1);
-	}
-	return snprintf(buf, PAGE_SIZE, "0\n");
-}
-static ssize_t etspi_sysfs_power_off_show(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	if(g_data->ldocontrol){
-		etspi_power_control(g_data, 0);
-	}
-	return snprintf(buf, PAGE_SIZE, "0\n");
-}
-static DEVICE_ATTR(sysfs_power_on, S_IRUGO,
-	etspi_sysfs_power_on_show, NULL);
-static DEVICE_ATTR(sysfs_power_off, S_IRUGO,
-	etspi_sysfs_power_off_show, NULL);
-#endif
 
 static DEVICE_ATTR(type_check, S_IRUGO,
 	etspi_type_check_show, NULL);
@@ -1215,10 +1120,6 @@ static struct device_attribute *fp_attrs[] = {
 	&dev_attr_vendor,
 	&dev_attr_name,
 	&dev_attr_adm,
-#ifndef ENABLE_SENSORS_FPRINT_SECURE
-	&dev_attr_sysfs_power_on,
-	&dev_attr_sysfs_power_off,
-#endif
 	NULL,
 };
 #endif
@@ -1386,15 +1287,10 @@ static int etspi_probe(struct spi_device *spi)
 #else
 	/* sensor hw type check */
 	do {
-		status = etspi_type_check(etspi);
+		etspi_type_check(etspi);
 		pr_info("%s type (%u), retry (%d)\n"
 			, __func__, etspi->sensortype, retry);
 	} while (!etspi->sensortype && ++retry < 3);
-
-	if (status == -1) {
-		pr_info("%s type check fail\n" , __func__);
-		goto etspi_type_check_failed;
-	}
 #endif
 
 #ifdef ENABLE_SENSORS_FPRINT_SECURE
@@ -1451,9 +1347,6 @@ etspi_probe_failed:
 	device_destroy(etspi_class, etspi->devt);
 	class_destroy(etspi_class);
 	etspi_platformUninit(etspi);
-#ifndef ENABLE_SENSORS_FPRINT_SECURE
-etspi_type_check_failed:
-#endif
 etspi_probe_platformInit_failed:
 etspi_probe_parse_dt_failed:
 	kfree(etspi);
@@ -1529,8 +1422,7 @@ static int etspi_pm_resume(struct device *dev)
 	if (g_data != NULL) {
 		etspi_enable_debug_timer();
 #ifndef ENABLE_SENSORS_FPRINT_SECURE
-		if(!g_data->ldocontrol)
-			etspi_power_control(g_data, 1);
+		etspi_power_control(g_data, 1);
 #endif
 	}
 	return 0;
