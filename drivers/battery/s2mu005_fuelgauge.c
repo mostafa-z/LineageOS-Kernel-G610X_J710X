@@ -1127,6 +1127,9 @@ static void s2mu005_fg_get_atomic_capacity(
 		struct s2mu005_fuelgauge_data *fuelgauge,
 		union power_supply_propval *val)
 {
+	union power_supply_propval val_chg_setting, val_float_voltage;
+	int avg_vbat = 0;
+
 	if (fuelgauge->pdata->capacity_calculation_type &
 			SEC_FUELGAUGE_CAPACITY_TYPE_ATOMIC) {
 		if (fuelgauge->capacity_old < val->intval)
@@ -1135,11 +1138,23 @@ static void s2mu005_fg_get_atomic_capacity(
 			val->intval = fuelgauge->capacity_old - 1;
 	}
 
+	psy_do_property("s2mu005-charger", get, \
+		POWER_SUPPLY_PROP_CHARGE_NOW, val_chg_setting);
+	psy_do_property("s2mu005-charger", get, \
+		POWER_SUPPLY_PROP_VOLTAGE_MAX, val_float_voltage);
+	avg_vbat = s2mu005_get_avgvbat(fuelgauge);
+
+	dev_info(&fuelgauge->i2c->dev,
+			"%s: float_voltage = %d, avg_vbat = %d\n",
+			__func__, val_float_voltage.intval, avg_vbat);
+
 	/* keep SOC stable in abnormal status */
 	if (fuelgauge->pdata->capacity_calculation_type &
 			SEC_FUELGAUGE_CAPACITY_TYPE_SKIP_ABNORMAL) {
-		if (!fuelgauge->is_charging &&
-				fuelgauge->capacity_old < val->intval) {
+		if ((!fuelgauge->is_charging || \
+			(val_chg_setting.intval == 0x00) || \
+			(val_float_voltage.intval + 20 < avg_vbat)) && \
+			(fuelgauge->capacity_old < val->intval)) {
 			dev_err(&fuelgauge->i2c->dev,
 					"%s: capacity (old %d : new %d)\n",
 					__func__, fuelgauge->capacity_old, val->intval);
