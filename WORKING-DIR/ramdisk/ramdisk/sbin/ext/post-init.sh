@@ -98,36 +98,11 @@ echo "128000" > /sys/module/lowmemorykiller/parameters/vmpressure_file_min #512 
 
 GOV_TUNING()
 {
-#echo "902000" > /cpufreq_l/interactive/hispeed_freq;
-#echo "75 1248000:85 1352000:92 1482000:98" > /cpufreq_l/interactive/target_loads;
+	echo "902000" > /cpufreq_l/interactive/hispeed_freq;
+	echo "75 1248000:85 1352000:92 1482000:98" > /cpufreq_l/interactive/target_loads;
 
-#echo "902000" > /cpufreq_b/interactive/hispeed_freq;
-#echo "75 546000:12 676000:68 757000:8 839000:67 902000:13 1014000:69 1144000:8 1248000:68 1352000:7 1482000:61 1586000:98" > /cpufreq_b/interactive/target_loads;
-
-# Set default CPU0-3 GOV to gabriel and tune it.
-chmod 644 /cpufreq_l/scaling_governor
-echo "gabriel" > /cpufreq_l/scaling_governor
-chmod 644 /cpufreq_l/gabriel/*
-echo 1 > /cpufreq_l/gabriel/freq_target_enable
-echo 25 > /cpufreq_l/gabriel/cpu_load_low
-echo 757000 > /cpufreq_l/gabriel/freq_target_low
-echo 50 > /cpufreq_l/gabriel/cpu_load_mid
-echo 1014000 > /cpufreq_l/gabriel/freq_target_mid
-echo 75 > /cpufreq_l/gabriel/cpu_load_hig
-echo 1352000 > /cpufreq_l/gabriel/freq_target_hig
-
-# Set default CPU4-7 GOV to gabriel and tune it.
-chmod 644 /cpufreq_b/scaling_governor
-echo "gabriel" > /cpufreq_b/scaling_governor
-chmod 644 /cpufreq_b/gabriel/*
-echo "39000 902000:19000 1248000:39000" > /cpufreq_b/gabriel/above_hispeed_delay
-echo 1 > /cpufreq_b/gabriel/freq_target_enable
-echo 25 > /cpufreq_b/gabriel/cpu_load_low
-echo 839000 > /cpufreq_b/gabriel/freq_target_low
-echo 50 > /cpufreq_b/gabriel/cpu_load_mid
-echo 1248000 > /cpufreq_b/gabriel/freq_target_mid
-echo 75 > /cpufreq_b/gabriel/cpu_load_hig
-echo 1586000 > /cpufreq_b/gabriel/freq_target_hig
+	echo "902000" > /cpufreq_b/interactive/hispeed_freq;
+	echo "75 546000:12 676000:68 757000:8 839000:67 902000:13 1014000:69 1144000:8 1248000:68 1352000:7 1482000:61 1586000:98" > /cpufreq_b/interactive/target_loads;
 }
 
 HMP_TUNING()
@@ -154,6 +129,20 @@ echo 700 > /sys/kernel/hmp/up_threshold;
 
 VM_DEFAULT()
 {
+	echo 0 > /proc/sys/vm/dirty_ratio; #default 0
+	echo 0 > /proc/sys/vm/dirty_background_ratio; #default 0
+	echo 200 > /proc/sys/vm/dirty_expire_centisecs; #default 200
+	echo 500 > /proc/sys/vm/dirty_writeback_centisecs; #default 500
+	echo 100 > /proc/sys/vm/swappiness; #default 100
+	echo 100 > /proc/sys/vm/vfs_cache_pressure; #default 100
+	echo 6806 > /proc/sys/vm/min_free_kbytes; #default 6806
+	echo "256 32" > /proc/sys/vm/lowmem_reserve_ratio; #default 256 32
+	$BB sleep 0.5s
+	$BB sync
+}
+
+VM_GABRIEL()
+{
 	echo 90 > /proc/sys/vm/dirty_ratio; #default 0
 	echo 70 > /proc/sys/vm/dirty_background_ratio; #default 0
 	echo 200 > /proc/sys/vm/dirty_expire_centisecs; #default 200
@@ -162,7 +151,7 @@ VM_DEFAULT()
 	echo 10 > /proc/sys/vm/vfs_cache_pressure; #default 100
 	echo 8192 > /proc/sys/vm/min_free_kbytes; #default 6806
 	echo "256 32" > /proc/sys/vm/lowmem_reserve_ratio; #default 256 32
-	echo 3 > /proc/sys/vm/drop_caches;
+#	echo 3 > /proc/sys/vm/drop_caches;
 	$BB sleep 0.5s
 	$BB sync
 }
@@ -212,9 +201,9 @@ OPEN_RW;
 
 # set system tuning.
 SYSTEM_TUNING;
-GOV_TUNING;
-HMP_TUNING;
-VM_SPEEDMODE;
+#GOV_TUNING;
+#HMP_TUNING;
+VM_GABRIEL;
 
 # Start any init.d scripts that may be present in the rom or added by the user
 $BB chmod -R 755 /system/etc/init.d/;
