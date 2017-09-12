@@ -146,7 +146,7 @@ FUNC_BUILD_KERNEL()
 
 	make -j$BUILD_JOB_NUMBER ARCH=$ARCH \
 			CROSS_COMPILE=$BUILD_CROSS_COMPILE \
-			CC='ccache '${BUILD_CROSS_COMPILE}gcc' --sysroot='$SYSROOT'' | grep :
+			CC='ccache '${BUILD_CROSS_COMPILE}gcc' --sysroot='$SYSROOT'' | grep : | grep -v ccache
 
 if [ -f $RDIR/arch/$ARCH/boot/Image ]; then
 	FUNC_BUILD_DTIMAGE_TARGET
