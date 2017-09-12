@@ -64,6 +64,9 @@ Module.symvers
 include/config
 include/generated
 arch/*/include/generated
+arch/arm64/boot/dtb
+security/selinux_n/av_permissions.h
+security/selinux_n/flask.h
 
 # stgit generated dirs
 patches-*
