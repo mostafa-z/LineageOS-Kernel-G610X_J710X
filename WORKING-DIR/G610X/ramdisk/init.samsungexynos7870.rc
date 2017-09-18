@@ -7,6 +7,7 @@ import init.fac.rc
 on early-init
     mkdir /efs 0771 radio system
     mkdir /cpefs 0771 radio system
+    mount debugfs /sys/kernel/debug /sys/kernel/debug
 
 on init
     mkdir /preload 0771 system system
@@ -30,23 +31,31 @@ on post-fs-data
 # Permissions for gnss
     chmod 0660 /dev/gnss_ipc
     chown system system /dev/gnss_ipc
+	
+# Directory for GPS
     mkdir /data/system 0771 system system
     chown system system /data/system
     mkdir /data/system/gps 0771 system system
     chown system system /data/system/gps
+    rm /data/system/gps/gps_started
+    rm /data/system/gps/glonass_started
+    rm /data/system/gps/beidou_started
+    rm /data/system/gps/smd_started
+    rm /data/system/gps/sv_cno.info
 
     setprop vold.post_fs_data_done 1
-
-#Private Mode
-    mkdir /mnt/shell/privatemode 0700 system system
-    mkdir /storage/Private 0000 system system
-    mkdir /data/privatemode 0770 system system
-    chown system system /data/privatemode
-    restorecon /data/privatemode
 
 # /efs/factory.prop for Dual / Single SIM settings
     chown radio radio /efs/factory.prop
     chmod 0600 /efs/factory.prop
+
+#Backup/Restore
+    chown system system /cache/backup
+    chmod 0711 /cache/backup
+    chown system system /cache/backup_stage
+    chmod 0711 /cache/backup_stage
+	
+    restorecon /sys/kernel/debug/tracing/trace_marker
 
 on boot
     # override init.rc to keep plenty of large order chunks around
@@ -57,7 +66,6 @@ on boot
 # SSWAP
     write /proc/sys/vm/swappiness 130
 
-    mount debugfs /sys/kernel/debug /sys/kernel/debug
     # Allow to access debugfs for system:system
 	chmod 755 /sys/kernel/debug
     chown system system /sys/kernel/debug
@@ -149,6 +157,23 @@ on boot
     chmod 0660 /sys/devices/system/cpu/cpu4/cpufreq/interactive/boostpulse_duration
     chown system system /sys/devices/system/cpu/cpu4/cpufreq/interactive/io_is_busy
     chmod 0660 /sys/devices/system/cpu/cpu4/cpufreq/interactive/io_is_busy
+
+#Setting Governor Parameters
+    write /sys/devices/system/cpu/cpu0/cpufreq/interactive/above_hispeed_delay "39000 1248000:19000"
+    write /sys/devices/system/cpu/cpu0/cpufreq/interactive/boostpulse_duration 40000
+    write /sys/devices/system/cpu/cpu0/cpufreq/interactive/go_hispeed_load 89  
+    write /sys/devices/system/cpu/cpu0/cpufreq/interactive/hispeed_freq 900000
+    write /sys/devices/system/cpu/cpu0/cpufreq/interactive/min_sample_time 40000
+    write /sys/devices/system/cpu/cpu0/cpufreq/interactive/target_loads "75 1248000:85"
+    write /sys/devices/system/cpu/cpu0/cpufreq/interactive/timer_slack 20000
+
+    write /sys/devices/system/cpu/cpu4/cpufreq/interactive/above_hispeed_delay "39000 1248000:19000"
+    write /sys/devices/system/cpu/cpu4/cpufreq/interactive/boostpulse_duration 40000
+    write /sys/devices/system/cpu/cpu4/cpufreq/interactive/go_hispeed_load 89  
+    write /sys/devices/system/cpu/cpu4/cpufreq/interactive/hispeed_freq 900000
+    write /sys/devices/system/cpu/cpu4/cpufreq/interactive/min_sample_time 40000
+    write /sys/devices/system/cpu/cpu4/cpufreq/interactive/target_loads "75 1248000:85"
+    write /sys/devices/system/cpu/cpu4/cpufreq/interactive/timer_slack 20000
 
     chown bluetooth net_bt /dev/ttySAC0
     chmod 0660 /dev/ttySAC0
@@ -615,20 +640,6 @@ on fs
     chown radio system /cpefs
     chmod 0771 /cpefs
 
-#For Absolute Persistence Partition
-    mkdir /persdata 0755 system system
-    mkdir /persdata/absolute 0750 system system
-
-    wait /dev/block/platform/13540000.dwmmc0/by-name/PERSDATA
-    check_fs /dev/block/platform/13540000.dwmmc0/by-name/PERSDATA ext4
-    mount ext4 /dev/block/platform/13540000.dwmmc0/by-name/PERSDATA /persdata/absolute nosuid nodev barrier=1
-
-    chown system system /persdata
-    chmod 0755 /persdata
-    chown system system /persdata/absolute
-    chmod 0750 /persdata/absolute
-
-
 # Copy DRM Key
     copy /system/app/wv.keys /factory/wv.keys
 
@@ -833,6 +844,14 @@ service prepare_param /system/bin/prepare_param.sh /dev/block/platform/13540000.
     seclabel u:r:prepare_param:s0
     oneshot
 
+# GPS
+service gpsd /system/bin/gpsd
+    class main
+    user gps
+    group system inet wakelock
+    ioprio be 0
+    seclabel u:r:gpsd:s0
+
 # Secure Storage startup
 service secure_storage /system/bin/secure_storage_daemon
     class core
@@ -865,13 +884,6 @@ on property:persist.sys.storage_preload=1
 on property:persist.sys.storage_preload=0
     start umount_service
 
-# SSWAP
-service swapon /sbin/sswap -s
-    class core
-    user root
-    group root
-    seclabel u:r:sswap:s0
-    oneshot
 
 # SSWAP
 service swapon /sbin/sswap -s -f 1536
@@ -881,10 +893,9 @@ service swapon /sbin/sswap -s -f 1536
     seclabel u:r:sswap:s0
     oneshot
 
-# IMS stack for IMS
+# IMS Stack
 service imsd /system/bin/imsd
     class main
     socket imsd stream 0660 system system
-    socket sme_socket stream 0660 system system
     user root
-    group system radio net_raw inet net_admin
+    group system radio net_raw inet net_admin readproc
