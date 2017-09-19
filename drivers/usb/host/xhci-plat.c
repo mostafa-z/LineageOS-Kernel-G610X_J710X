@@ -93,7 +93,7 @@ static int xhci_plat_probe(struct platform_device *pdev)
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
-		return -ENODEV;
+		return irq;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res)
@@ -211,6 +211,7 @@ static int xhci_plat_remove(struct platform_device *dev)
 	struct usb_hcd	*hcd = platform_get_drvdata(dev);
 	struct xhci_hcd	*xhci = hcd_to_xhci(hcd);
 	struct clk *clk = xhci->clk;
+	int timeout = 0;
 
 #if defined(CONFIG_USB_HOST_SAMSUNG_FEATURE)
 	pr_info("%s \n", __func__);
@@ -224,6 +225,7 @@ static int xhci_plat_remove(struct platform_device *dev)
 		pm_runtime_forbid(&xhci->main_hcd->self.root_hub->dev);
 	}
 #endif
+	xhci_dbg(xhci, "%s: waited %dmsec", __func__, timeout);
 	xhci->xhc_state |= XHCI_STATE_REMOVING;
 	usb_remove_hcd(xhci->shared_hcd);
 	usb_put_hcd(xhci->shared_hcd);
