@@ -751,6 +751,7 @@ config KSWAPD_CPU_AFFINITY_MASK
 config FORCE_ALLOC_FROM_DMA_ZONE
 	bool "Force certain memory allocators to always return ZONE_DMA memory"
 	depends on ZONE_DMA
+	default y
 	help
 	  Ensure certain memory allocators always return memory from ZONE_DMA.
 	  This option helps ensure that clients who require ZONE_DMA memory are
@@ -761,7 +762,7 @@ config FORCE_ALLOC_FROM_DMA_ZONE
 config PROCESS_RECLAIM
 	bool "Enable process reclaim"
 	depends on PROC_FS
-	default n
+	default y
 	help
 	 It allows to reclaim pages of the process by /proc/pid/reclaim.
 
