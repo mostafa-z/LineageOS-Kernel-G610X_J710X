@@ -31,6 +31,7 @@
 *.lz4
 *.lzo
 *.patch
+*.diff
 *.gcno
 modules.builtin
 Module.symvers
@@ -57,6 +58,7 @@ Module.symvers
 #
 !.gitignore
 !.mailmap
+!.placeholder
 
 #
 # Generated include files
@@ -64,7 +66,6 @@ Module.symvers
 include/config
 include/generated
 arch/*/include/generated
-arch/arm64/boot/dtb
 security/selinux_n/av_permissions.h
 security/selinux_n/flask.h
 
@@ -85,7 +86,12 @@ GRTAGS
 GSYMS
 GTAGS
 
+*.img
+*.zip
+*.log
+*.dtb
 *.orig
+*.rej
 *~
 \#*#
 
@@ -99,3 +105,12 @@ x509.genkey
 
 # Kconfig presets
 all.config
+
+WORKING-DIR/tools/split_img/boot.img-zImage
+WORKING-DIR/tools/split_img/boot.img-dtb
+arch/arm64/boot/dtb
+scripts/rkp_cfp/tmp
+arch/arm64/boot/dtb/
+arch/arm64/crypto/sha256-core.S
+arch/arm64/crypto/sha512-core.S
+
