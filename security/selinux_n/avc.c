@@ -993,8 +993,8 @@ static noinline int avc_denied(u32 ssid, u32 tsid,
 				u8 driver, u8 xperm, unsigned flags,
 				struct av_decision *avd)
 {
-	avc_update_node(AVC_CALLBACK_GRANT, requested, ssid,
-				tsid, tclass, avd->seqno);
+	avc_update_node(AVC_CALLBACK_GRANT, requested, 0, 0, ssid,
+				tsid, tclass, avd->seqno, 0, 0);
 	return 0;
 }
 
