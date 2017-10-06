@@ -601,7 +601,7 @@ static int mobicore_probe(struct platform_device *pdev)
 	*/
 	err = device_admin_init();
 	if (err)
-		goto fail_creat_dev;
+		goto fail_create_dev;
 
 	err = device_user_init();
 	if (err)
@@ -615,7 +615,7 @@ static int mobicore_probe(struct platform_device *pdev)
 
 		return 0;
 
-fail_creat_dev:
+fail_create_dev:
 	mc_scheduler_exit();
 fail_mc_device_sched_init:
 	mc_logging_exit();
