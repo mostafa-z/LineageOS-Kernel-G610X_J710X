@@ -169,6 +169,11 @@ SECTIONS
   . = ALIGN(64 / 8);
   __end__ = . ;
   _end = .; PROVIDE (end = .);
+  .stack         0x80000 :
+  {
+    _stack = .;
+    *(.stack)
+  }
   /* Stabs debugging sections.  */
   .stab          0 : { *(.stab) }
   .stabstr       0 : { *(.stabstr) }
@@ -208,11 +213,6 @@ SECTIONS
   /* DWARF Extension.  */
   .debug_macro    0 : { *(.debug_macro) }
   .debug_addr     0 : { *(.debug_addr) }
-    .stack         0x80000 :
-  {
-    _stack = .;
-    *(.stack)
-  }
   .ARM.attributes 0 : { KEEP (*(.ARM.attributes)) KEEP (*(.gnu.attributes)) }
   .note.gnu.arm.ident 0 : { KEEP (*(.note.gnu.arm.ident)) }
   /DISCARD/ : { *(.note.GNU-stack) *(.gnu_debuglink) *(.gnu.lto_*) }
